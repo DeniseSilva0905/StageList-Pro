@@ -1,0 +1,86 @@
+{
+  "entities": {
+    "Song": {
+      "title": "Song",
+      "description": "A song in the repertoire",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "artist": { "type": "string" },
+        "duration": { "type": "number" },
+        "style": { "type": "string" },
+        "driveLink": { "type": "string" },
+        "fileData": { "type": "string" },
+        "fileType": { "type": "string", "enum": ["ppt", "pdf", "other"] },
+        "lyrics": { "type": "string" },
+        "columns": { "type": "number", "enum": [1, 2] }
+      },
+      "required": ["id", "title", "artist", "duration", "style"]
+    },
+    "Block": {
+      "title": "Block",
+      "description": "A block of songs",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "songIds": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "name", "songIds"]
+    },
+    "Setlist": {
+      "title": "Setlist",
+      "description": "A list of songs/blocks for a show",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "items": { "type": "array", "items": { "$ref": "#/entities/SetlistItem" } },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "name", "items", "createdAt"]
+    },
+    "SetlistItem": {
+      "title": "SetlistItem",
+      "description": "A song or block within a setlist",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["block", "song"] },
+        "id": { "type": "string" }
+      },
+      "required": ["type", "id"]
+    },
+    "AppSettings": {
+      "title": "AppSettings",
+      "description": "Application settings",
+      "type": "object",
+      "properties": {
+        "repertoireLink": { "type": "string" },
+        "presentationBackground": { "type": "string" },
+        "presentationTextColor": { "type": "string" },
+        "presentationFontSize": { "type": "number" },
+        "autoScroll": { "type": "boolean" },
+        "scrollSpeed": { "type": "number" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}/songs/{songId}": {
+      "schema": "Song",
+      "description": "User's song repertoire"
+    },
+    "/users/{userId}/blocks/{blockId}": {
+      "schema": "Block",
+      "description": "User's repertoire blocks"
+    },
+    "/users/{userId}/setlists/{setlistId}": {
+      "schema": "Setlist",
+      "description": "User's saved setlists"
+    },
+    "/users/{userId}/settings/global": {
+      "schema": "AppSettings",
+      "description": "User's app configuration"
+    }
+  }
+}

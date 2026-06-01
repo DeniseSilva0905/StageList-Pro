@@ -1,0 +1,94 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Deny catch-all at the top
+    // match /{document=**} { allow read, write: if false; } // Handled above
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      
+      match /songs/{songId} {
+        function isValidSong(data) {
+          return data.keys().hasAll(['id', 'title', 'artist', 'duration', 'style']) &&
+                 data.id is string && data.id.size() <= 64 &&
+                 data.title is string && data.title.size() <= 256 &&
+                 data.artist is string && data.artist.size() <= 256 &&
+                 data.duration is number &&
+                 data.style is string && data.style.size() <= 100;
+        }
+
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(songId) && isValidSong(incoming());
+        allow update: if isOwner(userId) && isValidId(songId) && isValidSong(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      match /blocks/{blockId} {
+        function isValidBlock(data) {
+          return data.keys().hasAll(['id', 'name', 'songIds']) &&
+                 data.id is string && data.id.size() <= 64 &&
+                 data.name is string && data.name.size() <= 256 &&
+                 data.songIds is list;
+        }
+
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(blockId) && isValidBlock(incoming());
+        allow update: if isOwner(userId) && isValidId(blockId) && isValidBlock(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      match /setlists/{setlistId} {
+        function isValidSetlist(data) {
+          return data.keys().hasAll(['id', 'name', 'items', 'createdAt']) &&
+                 data.id is string && data.id.size() <= 64 &&
+                 data.name is string && data.name.size() <= 256 &&
+                 data.items is list &&
+                 data.createdAt is number;
+        }
+
+        allow list: if isOwner(userId);
+        allow get: if isOwner(userId);
+        allow create: if isOwner(userId) && isValidId(setlistId) && isValidSetlist(incoming());
+        allow update: if isOwner(userId) && isValidId(setlistId) && isValidSetlist(incoming());
+        allow delete: if isOwner(userId);
+      }
+
+      match /settings/{docId} {
+        function isValidSettings(data) {
+          return data.keys().hasAny(['repertoireLink', 'presentationBackground', 'presentationTextColor', 'presentationFontSize', 'autoScroll', 'scrollSpeed']);
+        }
+
+        allow get: if isOwner(userId);
+        allow write: if isOwner(userId) && isValidSettings(incoming());
+      }
+    }
+  }
+}
