@@ -87,7 +87,13 @@ export async function parsePdfFile(file: File): Promise<string> {
   return parsedPages.join('<p class="slide-break"></p>');
 }
 
-export async function parsePptxFile(file: File): Promise<string> {
+export interface ParsedPptx {
+  lyrics: string;
+  lyricsFontSize: number;
+  columns: 1 | 2;
+}
+
+export async function parsePptxFile(file: File): Promise<ParsedPptx> {
   const arrayBuffer = await file.arrayBuffer();
   const zip = await JSZip.loadAsync(arrayBuffer);
   
@@ -108,41 +114,168 @@ export async function parsePptxFile(file: File): Promise<string> {
   });
 
   const parsedSlides: string[] = [];
+  const allFontSizes: number[] = [];
+  let detectedColumns: 1 | 2 = 1;
+
+  function escapeHtml(text: string): string {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  function getElementsByTagNameFlexible(parent: Document | Element, tagName: string): Element[] {
+    const withPrefix = parent.getElementsByTagName(`a:${tagName}`);
+    if (withPrefix.length > 0) {
+      return Array.from(withPrefix);
+    }
+    const withpPrefix = parent.getElementsByTagName(`p:${tagName}`);
+    if (withpPrefix.length > 0) {
+      return Array.from(withpPrefix);
+    }
+    const withNoPrefix = parent.getElementsByTagName(tagName);
+    if (withNoPrefix.length > 0) {
+      return Array.from(withNoPrefix);
+    }
+    const all = parent.getElementsByTagName('*');
+    const filtered: Element[] = [];
+    for (let i = 0; i < all.length; i++) {
+      const el = all[i];
+      if (el.localName === tagName) {
+        filtered.push(el);
+      }
+    }
+    return filtered;
+  }
 
   for (const slideKey of slideKeys) {
     const xmlText = await zip.files[slideKey].async('text');
     const parser = new DOMParser();
     const doc = parser.parseFromString(xmlText, 'application/xml');
     
+    // Check columns inside bodyPr
+    const bodyPrElements = [
+      ...getElementsByTagNameFlexible(doc, 'bodyPr')
+    ];
+    for (const bodyPr of bodyPrElements) {
+      const numCol = bodyPr.getAttribute('numCol');
+      if (numCol) {
+        const cols = parseInt(numCol, 10);
+        if (cols > 1) {
+          detectedColumns = 2;
+        }
+      }
+    }
+
     // Extract paragraph elements (<a:p>)
-    const pNodes = Array.from(doc.getElementsByTagName('a:p'));
+    const pNodes = getElementsByTagNameFlexible(doc, 'p');
     const slideParagraphs: string[] = [];
     
     for (const pNode of pNodes) {
-      const tNodes = Array.from(pNode.getElementsByTagName('a:t'));
-      const lineText = tNodes.map(t => t.textContent || '').join('').trim();
-      if (lineText) {
-        slideParagraphs.push(lineText);
+      const runNodes = Array.from(pNode.childNodes);
+      let paragraphHtml = '';
+      let hasText = false;
+      
+      for (const rNode of runNodes) {
+        const localName = (rNode as any).localName || '';
+        
+        if (localName === 'r' || localName === 'fld') {
+          const element = rNode as Element;
+          const tNodes = getElementsByTagNameFlexible(element, 't');
+          const textContent = Array.from(tNodes).map(t => t.textContent || '').join('');
+          
+          if (textContent) {
+            hasText = true;
+            
+            // Extract run properties
+            const rPrNodes = getElementsByTagNameFlexible(element, 'rPr');
+            let styleStr = '';
+            
+            if (rPrNodes.length > 0) {
+              const rPr = rPrNodes[0];
+              
+              // 1. Font Size
+              const szAttr = rPr.getAttribute('sz');
+              if (szAttr) {
+                const sizePts = parseInt(szAttr, 10) / 100;
+                if (!isNaN(sizePts)) {
+                  styleStr += `font-size: ${sizePts}px; `;
+                  allFontSizes.push(sizePts);
+                }
+              }
+              
+              // 2. Font Color (solidFill and srgbClr)
+              const solidFillNodes = getElementsByTagNameFlexible(rPr, 'solidFill');
+              if (solidFillNodes.length > 0) {
+                const srgbClrNodes = getElementsByTagNameFlexible(solidFillNodes[0], 'srgbClr');
+                if (srgbClrNodes.length > 0) {
+                  const colorVal = srgbClrNodes[0].getAttribute('val');
+                  if (colorVal) {
+                    styleStr += `color: #${colorVal}; `;
+                  }
+                }
+              }
+            }
+            
+            if (styleStr) {
+              paragraphHtml += `<span style="${styleStr.trim()}">${escapeHtml(textContent)}</span>`;
+            } else {
+              paragraphHtml += escapeHtml(textContent);
+            }
+          }
+        } else if (localName === 'br') {
+          paragraphHtml += '<br/>';
+        }
+      }
+      
+      if (hasText && paragraphHtml) {
+        slideParagraphs.push(`<p class="text-align-left">${paragraphHtml}</p>`);
       }
     }
     
     if (slideParagraphs.length > 0) {
-      // Build HTML paragraphs for this slide (standard left-aligned format requested)
-      const slideHtml = slideParagraphs
-        .map(text => `<p class="text-align-left">${text}</p>`)
-        .join('');
+      const slideHtml = slideParagraphs.join('');
       parsedSlides.push(slideHtml);
     }
   }
 
   // Combine slides using slide-break delimiter
-  return parsedSlides.join('<p class="slide-break"></p>');
+  const combinedLyrics = parsedSlides.join('<p class="slide-break"></p>');
+
+  // Find dominant font size
+  let dominantFontSize = 48; // fallback default
+  if (allFontSizes.length > 0) {
+    const validSizes = allFontSizes.filter(sz => sz >= 14 && sz <= 80);
+    const targetSizes = validSizes.length > 0 ? validSizes : allFontSizes;
+    
+    const freq: { [key: number]: number } = {};
+    let maxCount = 0;
+    let mode = targetSizes[0];
+    
+    for (const sz of targetSizes) {
+      const rounded = Math.round(sz);
+      freq[rounded] = (freq[rounded] || 0) + 1;
+      if (freq[rounded] > maxCount) {
+        maxCount = freq[rounded];
+        mode = rounded;
+      }
+    }
+    dominantFontSize = mode;
+  }
+
+  return {
+    lyrics: combinedLyrics,
+    lyricsFontSize: dominantFontSize,
+    columns: detectedColumns,
+  };
 }
 
 interface SongEditorProps {
   song: Song | null;
   songs: Song[];
-  onSave: (song: Song) => void;
+  onSave: (song: Song, close?: boolean) => void;
   onCancel: () => void;
   settings: AppSettings;
   onUpdateSettings: (settings: AppSettings) => void;
@@ -159,11 +292,25 @@ export function SongEditor({ song, songs, onSave, onCancel, settings, onUpdateSe
   const [formColumns, setFormColumns] = useState<1 | 2>(song?.columns || 1);
   const [formFileData, setFormFileData] = useState<string | undefined>(song?.fileData);
   const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
+  const [formLyricsFontSize, setFormLyricsFontSize] = useState<number>(() => {
+    if (song) {
+      return song.lyricsFontSize || settings?.presentationFontSize || 40;
+    }
+    return 48; // New manually created songs default to 48px
+  });
+  const [formLineSpacing, setFormLineSpacing] = useState<'single' | '1.5'>(() => {
+    if (song) {
+      return song.lineSpacing || 'single';
+    }
+    return 'single'; // New manually created songs default to simple spacing
+  });
   
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSave = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleSave = (e?: React.FormEvent, closeAfterSave = true) => {
+    if (e) {
+      e.preventDefault();
+    }
     const newSong: Song = {
       id: song?.id || crypto.randomUUID(),
       title: formTitle,
@@ -175,9 +322,11 @@ export function SongEditor({ song, songs, onSave, onCancel, settings, onUpdateSe
       lyrics: formLyrics,
       columns: formColumns,
       fileData: formFileData,
+      lyricsFontSize: formLyricsFontSize,
+      lineSpacing: formLineSpacing,
     };
 
-    onSave(newSong);
+    onSave(newSong, closeAfterSave);
   };
 
   const processImportedFile = (file: File) => {
@@ -204,9 +353,12 @@ export function SongEditor({ song, songs, onSave, onCancel, settings, onUpdateSe
       
       if (extension === 'pptx') {
         const loadingToast = toast.loading('Processando arquivo PPTX e mapeando slides...');
-        parsePptxFile(file).then(htmlLyrics => {
-          setFormLyrics(htmlLyrics);
-          setFormColumns(1); // Default to 1 column for presentation slides
+        parsePptxFile(file).then(({ lyrics, lyricsFontSize, columns }) => {
+          setFormLyrics(lyrics);
+          setFormColumns(columns || 1);
+          if (lyricsFontSize) {
+            setFormLyricsFontSize(lyricsFontSize);
+          }
           toast.dismiss(loadingToast);
           toast.success(`Slides extraídos do PPTX com sucesso (${file.name})!`);
         }).catch(err => {
@@ -266,8 +418,19 @@ export function SongEditor({ song, songs, onSave, onCancel, settings, onUpdateSe
           <Button variant="ghost" onClick={onCancel} className="text-[10px] px-3 h-8 uppercase tracking-widest">
             Cancelar
           </Button>
-          <Button type="submit" form="song-editor-form" className="bg-primary hover:bg-primary/90 px-6 h-8 text-[10px] uppercase font-bold tracking-widest flex-1 md:flex-none">
+          <Button 
+            type="button" 
+            onClick={() => handleSave(undefined, false)} 
+            className="bg-zinc-800 hover:bg-zinc-700 text-white border border-zinc-700 px-4 h-8 text-[10px] uppercase font-bold tracking-widest"
+          >
             <Save className="mr-2 h-3 w-3" /> SALVAR
+          </Button>
+          <Button 
+            type="button" 
+            onClick={() => handleSave(undefined, true)} 
+            className="bg-primary hover:bg-primary/90 px-4 h-8 text-[10px] uppercase font-bold tracking-widest"
+          >
+            <Save className="mr-2 h-3 w-3" /> SALVAR E FECHAR
           </Button>
         </div>
       </header>
@@ -275,7 +438,7 @@ export function SongEditor({ song, songs, onSave, onCancel, settings, onUpdateSe
       <div className="flex-1 overflow-y-auto">
         <form 
           id="song-editor-form" 
-          onSubmit={handleSave} 
+          onSubmit={(e) => handleSave(e, true)} 
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               const target = e.target as HTMLElement;
@@ -473,6 +636,10 @@ export function SongEditor({ song, songs, onSave, onCancel, settings, onUpdateSe
                 onSearchLyrics={handleSearchLyrics}
                 settings={settings}
                 onUpdateSettings={onUpdateSettings}
+                lineSpacing={formLineSpacing}
+                onChangeLineSpacing={setFormLineSpacing}
+                lyricsFontSize={formLyricsFontSize}
+                onChangeLyricsFontSize={setFormLyricsFontSize}
               />
             </div>
           </div>

@@ -4,7 +4,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
-import { Plus, Search, Trash2, Edit2, ExternalLink, FileUp, Music, Play, FileText, ArrowUpDown, ArrowUp, ArrowDown, Check, Loader2, AlertTriangle, PlusCircle } from 'lucide-react';
+import { Plus, Search, Trash2, Edit2, ExternalLink, FileUp, Music, Play, FileText, ArrowUpDown, ArrowUp, ArrowDown, Check, Loader2, AlertTriangle, PlusCircle, Presentation, ChevronDown } from 'lucide-react';
 import { formatDuration, parseDuration } from '../lib/duration';
 import { toast } from 'sonner';
 import { getInitialSongs } from '../lib/initialSongs';
@@ -29,6 +29,93 @@ interface LibraryProps {
   onEditSong: (song: Song | null) => void;
 }
 
+interface MultiSelectDropdownProps {
+  label: string;
+  options: { id: string; name: string }[];
+  selectedValues: string[];
+  onChange: (values: string[]) => void;
+  className?: string;
+  compact?: boolean;
+}
+
+function MultiSelectDropdown({ 
+  label, 
+  options, 
+  selectedValues, 
+  onChange, 
+  className = "", 
+  compact = false 
+}: MultiSelectDropdownProps) {
+  const [isOpen, setIsOpen] = useState(false);
+
+  const toggleValue = (val: string) => {
+    if (selectedValues.includes(val)) {
+      onChange(selectedValues.filter(v => v !== val));
+    } else {
+      onChange([...selectedValues, val]);
+    }
+  };
+
+  return (
+    <div className={`relative inline-block text-left ${className}`}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setIsOpen(!isOpen);
+        }}
+        className={`w-full flex items-center justify-between border border-border bg-background text-foreground transition-colors outline-none cursor-pointer text-left
+          ${compact 
+            ? 'h-7 px-1.5 py-0.5 text-[9px] uppercase font-normal tracking-wide rounded-sm' 
+            : 'h-9 px-3 py-1.5 text-xs rounded-md font-medium uppercase tracking-wider'}`}
+      >
+        <span className="truncate mr-1">
+          {selectedValues.length === 0 
+            ? label 
+            : `${label} (${selectedValues.length})`}
+        </span>
+        <ChevronDown className={compact ? "h-2.5 w-2.5 opacity-50 shrink-0" : "h-3 w-3 opacity-50 shrink-0"} />
+      </button>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-10" onClick={(e) => {
+            e.stopPropagation();
+            setIsOpen(false);
+          }} />
+          <div className="absolute left-0 mt-1 w-56 z-20 bg-card border border-border shadow-xl p-2 space-y-1 max-h-60 overflow-y-auto rounded-md">
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onChange([]);
+              }}
+              className="w-full text-left text-[9px] uppercase tracking-wider font-bold p-1 border-b border-border/40 mb-1 hover:text-primary text-foreground"
+            >
+              Limpar Seleção
+            </button>
+            {options.map(opt => (
+              <label 
+                key={opt.id} 
+                className="flex items-center space-x-2 text-[10px] uppercase tracking-wider font-mono p-1 hover:bg-muted/50 cursor-pointer"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedValues.includes(opt.id)}
+                  onChange={() => toggleValue(opt.id)}
+                  className="rounded-sm border-border accent-primary h-3.5 w-3.5 shrink-0"
+                />
+                <span className="text-foreground truncate">{opt.name}</span>
+              </label>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, onEditSong }: LibraryProps) {
   const [search, setSearch] = useState('');
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
@@ -51,10 +138,10 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
     currentFile: '',
     results: []
   });
-  const [sortConfig, setSortConfig] = useState<{ key: keyof Song; direction: 'asc' | 'desc' } | null>({ key: 'title', direction: 'asc' });
-  const [selectedArtist, setSelectedArtist] = useState<string>('all');
-  const [selectedStyle, setSelectedStyle] = useState<string>('all');
-  const [selectedBlock, setSelectedBlock] = useState<string>('all');
+  const [sortConfig, setSortConfig] = useState<{ key: keyof Song | 'block'; direction: 'asc' | 'desc' } | null>({ key: 'title', direction: 'asc' });
+  const [selectedArtists, setSelectedArtists] = useState<string[]>([]);
+  const [selectedStyles, setSelectedStyles] = useState<string[]>([]);
+  const [selectedBlocks, setSelectedBlocks] = useState<string[]>([]);
 
   const uniqueArtists = React.useMemo(() => {
     const list = songs.map(s => s.artist).filter(Boolean);
@@ -69,20 +156,209 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
   }, [songs]);
 
   const availableBlocks = React.useMemo(() => {
-    return [...blocks].sort((a, b) => a.name.localeCompare(b.name));
+    return [...blocks].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
   }, [blocks]);
 
-  const hasActiveFilters = selectedArtist !== 'all' || selectedStyle !== 'all' || selectedBlock !== 'all';
+  const organizedBlocks = React.useMemo(() => {
+    const sorted = [...blocks].sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+    const numericB: Block[] = [];
+    const alphabeticB: Block[] = [];
+    
+    sorted.forEach(block => {
+      if (/^\d|bloco\s+\d+/i.test(block.name)) {
+        numericB.push(block);
+      } else {
+        alphabeticB.push(block);
+      }
+    });
+    
+    return { numeric: numericB, alphabetic: alphabeticB };
+  }, [blocks]);
+
+  const downloadPDF = async (song: Song) => {
+    try {
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF({
+        orientation: 'landscape',
+        unit: 'pt',
+        format: 'a4'
+      });
+
+      let rawLyrics = song.lyrics || '';
+      const cleanHtmlToSlides = (html: string): string[] => {
+        if (!html) return [''];
+        if (html.includes('slide-break')) {
+          const parts = html.split(/<p[^>]*class="[^"]*slide-break[^"]*"[^>]*>.*?<\/p>|<p[^>]*class="slide-break"[^>]*>.*?<\/p>/gi);
+          return parts.map(p => {
+            return p.replace(/<[^>]+>/g, '\n')
+                    .replace(/\n+/g, '\n')
+                    .trim();
+          });
+        }
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const paragraphs = Array.from(tempDiv.querySelectorAll('p'));
+        if (paragraphs.length > 0) {
+          return paragraphs.map(p => p.textContent || '').filter(t => t.trim() !== '');
+        }
+        return html.replace(/<[^>]+>/g, '\n').split('\n\n').map(s => s.trim()).filter(s => s !== '');
+      };
+
+      const slides = cleanHtmlToSlides(rawLyrics);
+
+      slides.forEach((slideText, index) => {
+        if (index > 0) {
+          doc.addPage();
+        }
+        doc.setFillColor(30, 30, 30);
+        doc.rect(0, 0, 842, 595, 'F');
+
+        doc.setTextColor(57, 255, 20);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(24);
+        doc.text(song.title.toUpperCase(), 40, 50);
+
+        if (song.artist) {
+          doc.setTextColor(255, 255, 255);
+          doc.setFont('helvetica', 'normal');
+          doc.setFontSize(14);
+          doc.text(song.artist, 40, 75);
+        }
+
+        doc.setDrawColor(57, 255, 20);
+        doc.setLineWidth(1);
+        doc.line(40, 90, 802, 90);
+
+        doc.setTextColor(150, 150, 150);
+        doc.setFontSize(10);
+        doc.text(`Slide ${index + 1} de ${slides.length}`, 750, 50);
+
+        doc.setTextColor(255, 255, 255);
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(24);
+
+        const lines = slideText.split('\n').map(l => l.trim()).filter(l => l !== '');
+        const startY = 180;
+        const lineHeight = 35;
+        
+        lines.forEach((line, lineIdx) => {
+          const textWidth = doc.getTextWidth(line);
+          const x = (842 - textWidth) / 2;
+          doc.text(line, x, startY + (lineIdx * lineHeight));
+        });
+      });
+
+      doc.save(`${song.title.replace(/[^a-z0-9]/gi, '_')}.pdf`);
+      toast.success('PDF baixado com sucesso!');
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao baixar PDF.');
+    }
+  };
+
+  const downloadPPTX = async (song: Song) => {
+    try {
+      const pptxgen = (await import('pptxgenjs')).default;
+      const pres = new pptxgen();
+
+      pres.layout = 'LAYOUT_16x9';
+
+      let rawLyrics = song.lyrics || '';
+      const cleanHtmlToSlides = (html: string): string[] => {
+        if (!html) return [''];
+        if (html.includes('slide-break')) {
+          const parts = html.split(/<p[^>]*class="[^"]*slide-break[^"]*"[^>]*>.*?<\/p>|<p[^>]*class="slide-break"[^>]*>.*?<\/p>/gi);
+          return parts.map(p => {
+            return p.replace(/<[^>]+>/g, '\n')
+                    .replace(/\n+/g, '\n')
+                    .trim();
+          });
+        }
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = html;
+        const paragraphs = Array.from(tempDiv.querySelectorAll('p'));
+        if (paragraphs.length > 0) {
+          return paragraphs.map(p => p.textContent || '').filter(t => t.trim() !== '');
+        }
+        return html.replace(/<[^>]+>/g, '\n').split('\n\n').map(s => s.trim()).filter(s => s !== '');
+      };
+
+      const slides = cleanHtmlToSlides(rawLyrics);
+
+      slides.forEach((slideText, index) => {
+        const slide = pres.addSlide();
+        slide.background = { color: '1E1E1E' };
+
+        slide.addText(song.title.toUpperCase(), {
+          x: 0.5,
+          y: 0.4,
+          w: 8.5,
+          h: 0.6,
+          fontSize: 22,
+          fontFace: 'Arial',
+          bold: true,
+          color: '39FF14'
+        });
+
+        if (song.artist) {
+          slide.addText(song.artist, {
+            x: 0.5,
+            y: 0.9,
+            w: 8.5,
+            h: 0.4,
+            fontSize: 14,
+            fontFace: 'Arial',
+            color: 'FFFFFF'
+          });
+        }
+
+        slide.addText(`${index + 1} de ${slides.length}`, {
+          x: 11.5,
+          y: 0.4,
+          w: 1.3,
+          h: 0.4,
+          fontSize: 10,
+          fontFace: 'Arial',
+          color: '969696',
+          align: 'right'
+        });
+
+        const textLines = slideText.split('\n').map(l => l.trim()).filter(l => l !== '');
+        const joinedText = textLines.join('\n');
+
+        slide.addText(joinedText, {
+          x: 0.5,
+          y: 1.8,
+          w: 12.3,
+          h: 4.8,
+          fontSize: 24,
+          fontFace: 'Arial',
+          color: 'FFFFFF',
+          bold: true,
+          align: 'center',
+          valign: 'middle'
+        });
+      });
+
+      await pres.writeFile({ fileName: `${song.title.replace(/[^a-z0-9]/gi, '_')}.pptx` });
+      toast.success('PowerPoint baixado com sucesso!');
+    } catch (err) {
+      console.error(err);
+      toast.error('Erro ao baixar PowerPoint.');
+    }
+  };
+
+  const hasActiveFilters = selectedArtists.length > 0 || selectedStyles.length > 0 || selectedBlocks.length > 0;
 
   const clearFilters = () => {
-    setSelectedArtist('all');
-    setSelectedStyle('all');
-    setSelectedBlock('all');
+    setSelectedArtists([]);
+    setSelectedStyles([]);
+    setSelectedBlocks([]);
   };
   
   const importFileInputRef = useRef<HTMLInputElement>(null);
 
-  const handleSort = (key: keyof Song) => {
+  const handleSort = (key: keyof Song | 'block') => {
     let direction: 'asc' | 'desc' = 'asc';
     if (sortConfig && sortConfig.key === key && sortConfig.direction === 'asc') {
       direction = 'desc';
@@ -92,16 +368,20 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
 
   const filteredSongs = songs
     .filter(song => {
+      const searchLower = search.toLowerCase();
       const matchesSearch = 
-        song.title.toLowerCase().includes(search.toLowerCase()) ||
-        song.artist.toLowerCase().includes(search.toLowerCase()) ||
-        song.style.toLowerCase().includes(search.toLowerCase());
+        song.title.toLowerCase().includes(searchLower) ||
+        song.artist.toLowerCase().includes(searchLower) ||
+        song.style.toLowerCase().includes(searchLower) ||
+        blocks.some(b => b.name.toLowerCase().includes(searchLower) && (b.items || []).some(it => it.songId === song.id));
 
-      const matchesArtist = selectedArtist === 'all' || song.artist === selectedArtist;
-      const matchesStyle = selectedStyle === 'all' || song.style === selectedStyle;
-      const matchesBlock = selectedBlock === 'all' || (() => {
-        const block = blocks.find(b => b.id === selectedBlock);
-        return block?.items?.some(item => item.songId === song.id) || false;
+      const matchesArtist = selectedArtists.length === 0 || selectedArtists.includes(song.artist);
+      const matchesStyle = selectedStyles.length === 0 || selectedStyles.includes(song.style);
+      const matchesBlock = selectedBlocks.length === 0 || (() => {
+        return selectedBlocks.some(blockId => {
+          const block = blocks.find(b => b.id === blockId);
+          return block?.items?.some(item => item.songId === song.id) || false;
+        });
       })();
 
       return matchesSearch && matchesArtist && matchesStyle && matchesBlock;
@@ -110,10 +390,26 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
       if (!sortConfig) return 0;
       const { key, direction } = sortConfig;
       
-      const valA = a[key];
-      const valB = b[key];
+      let valA: any;
+      let valB: any;
+
+      if (key === 'block') {
+        const blockAObj = blocks.find(b => b.items?.some(it => it.songId === a.id));
+        const blockBObj = blocks.find(b => b.items?.some(it => it.songId === b.id));
+        valA = blockAObj ? blockAObj.name : '';
+        valB = blockBObj ? blockBObj.name : '';
+      } else {
+        valA = a[key as keyof Song];
+        valB = b[key as keyof Song];
+      }
 
       if (valA === undefined || valB === undefined) return 0;
+
+      if (typeof valA === 'string' && typeof valB === 'string') {
+        return direction === 'asc' 
+          ? valA.localeCompare(valB, undefined, { numeric: true, sensitivity: 'base' }) 
+          : valB.localeCompare(valA, undefined, { numeric: true, sensitivity: 'base' });
+      }
 
       if (valA < valB) return direction === 'asc' ? -1 : 1;
       if (valA > valB) return direction === 'asc' ? 1 : -1;
@@ -320,14 +616,22 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
 
       try {
         let htmlContent = '';
+        let detectedFontSize = 48;
+        let detectedColumns: 1 | 2 = 1;
+
         if (extension === 'pptx' || extension === 'ppt') {
           if (extension === 'pptx') {
-            htmlContent = await parsePptxFile(file);
+            const parsed = await parsePptxFile(file);
+            htmlContent = parsed.lyrics;
+            detectedFontSize = parsed.lyricsFontSize;
+            detectedColumns = parsed.columns;
           } else {
             throw new Error('Mapeamento não suportado para .ppt legado. Use .pptx!');
           }
         } else if (extension === 'pdf') {
           htmlContent = await parsePdfFile(file);
+          detectedFontSize = 48;
+          detectedColumns = 1;
         } else if (extension === 'txt') {
           const text = await file.text();
           htmlContent = text
@@ -340,6 +644,8 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
               return `<p class="text-align-left">${trimmed}</p>`;
             })
             .join('');
+          detectedFontSize = 48;
+          detectedColumns = 1;
         } else {
           throw new Error('Formato de arquivo não suportado (.pptx, .pdf ou .txt apenas)');
         }
@@ -347,20 +653,24 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
         // Match with existing song
         const matchIndex = updatedSongs.findIndex(s => normalizeTitle(s.title) === normalizeTitle(fileNameWithoutExt));
 
-        if (matchIndex !== -1) {
-          updatedSongs[matchIndex] = {
-            ...updatedSongs[matchIndex],
-            lyrics: htmlContent,
-            fileType: extension === 'pptx' ? 'ppt' : extension === 'pdf' ? 'pdf' : 'other',
-            columns: 1
-          };
-          updatedCount++;
-          results.push({
-            name: file.name,
-            success: true,
-            updated: true
-          });
-        } else {
+         if (matchIndex !== -1) {
+           const existingSong = updatedSongs[matchIndex];
+           updatedSongs[matchIndex] = {
+             ...existingSong,
+             // Preserva a letra modificada pelo usuário (ou adota a nova se estivesse vazia)
+             lyrics: existingSong.lyrics || htmlContent,
+             fileType: existingSong.fileType || (extension === 'pptx' ? 'ppt' : extension === 'pdf' ? 'pdf' : 'other'),
+             columns: extension === 'pptx' ? detectedColumns : (existingSong.columns || 1),
+             lineSpacing: existingSong.lineSpacing || 'single',
+             lyricsFontSize: extension === 'pptx' ? detectedFontSize : (existingSong.lyricsFontSize || 48)
+           };
+           updatedCount++;
+           results.push({
+             name: file.name,
+             success: true,
+             updated: true
+           });
+         } else {
           // Create a new song automatically if not found to prevent data loss
           const newSong: Song = {
             id: crypto.randomUUID(),
@@ -371,7 +681,9 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
             driveLink: '',
             fileType: extension === 'pptx' ? 'ppt' : extension === 'pdf' ? 'pdf' : 'other',
             lyrics: htmlContent,
-            columns: 1
+            columns: detectedColumns,
+            lyricsFontSize: detectedFontSize, // Novas importadas vêm com fonte detectada ou padrão
+            lineSpacing: 'single' // E espaçamento simples
           };
           updatedSongs.push(newSong);
           updatedCount++;
@@ -669,38 +981,29 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
           />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <select 
-            value={selectedArtist} 
-            onChange={(e) => setSelectedArtist(e.target.value)}
-            className="bg-background text-foreground border border-input rounded-md px-3 py-1 text-xs focus:ring-1 focus:ring-primary outline-none cursor-pointer h-9 w-full sm:w-[180px] dark:bg-input/30"
-          >
-            <option value="all">ARTISTA (TODOS)</option>
-            {uniqueArtists.map(artist => (
-              <option key={artist} value={artist}>{artist}</option>
-            ))}
-          </select>
+          <MultiSelectDropdown
+            label="Artista"
+            options={uniqueArtists.map(artist => ({ id: artist, name: artist }))}
+            selectedValues={selectedArtists}
+            onChange={setSelectedArtists}
+            className="w-full sm:w-[180px]"
+          />
 
-          <select 
-            value={selectedBlock} 
-            onChange={(e) => setSelectedBlock(e.target.value)}
-            className="bg-background text-foreground border border-input rounded-md px-3 py-1 text-xs focus:ring-1 focus:ring-primary outline-none cursor-pointer h-9 w-full sm:w-[150px] dark:bg-input/30"
-          >
-            <option value="all">BLOCO (TODOS)</option>
-            {availableBlocks.map(block => (
-              <option key={block.id} value={block.id}>{block.name}</option>
-            ))}
-          </select>
+          <MultiSelectDropdown
+            label="Bloco"
+            options={availableBlocks.map(block => ({ id: block.id, name: block.name }))}
+            selectedValues={selectedBlocks}
+            onChange={setSelectedBlocks}
+            className="w-full sm:w-[150px]"
+          />
 
-          <select 
-            value={selectedStyle} 
-            onChange={(e) => setSelectedStyle(e.target.value)}
-            className="bg-background text-foreground border border-input rounded-md px-3 py-1 text-xs focus:ring-1 focus:ring-primary outline-none cursor-pointer h-9 w-full sm:w-[150px] dark:bg-input/30"
-          >
-            <option value="all">ESTILO (TODOS)</option>
-            {uniqueStyles.map(style => (
-              <option key={style} value={style}>{style}</option>
-            ))}
-          </select>
+          <MultiSelectDropdown
+            label="Estilo"
+            options={uniqueStyles.map(style => ({ id: style, name: style }))}
+            selectedValues={selectedStyles}
+            onChange={setSelectedStyles}
+            className="w-full sm:w-[150px]"
+          />
 
           {hasActiveFilters && (
             <Button 
@@ -740,6 +1043,12 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
                     <p className="text-primary text-xs font-medium">{song.artist}</p>
                   </div>
                   <div className="flex items-center gap-1">
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-500 hover:text-emerald-400" onClick={() => downloadPDF(song)} title="Baixar PDF">
+                      <FileText className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-500 hover:text-orange-400" onClick={() => downloadPPTX(song)} title="Baixar PPTX (PowerPoint)">
+                      <Presentation className="h-4 w-4" />
+                    </Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8 text-primary" onClick={() => onEditSong(song)}>
                       <Edit2 className="h-4 w-4" />
                     </Button>
@@ -805,32 +1114,35 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
                       sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                     ) : <ArrowUpDown className="h-3 w-3 opacity-30" />}
                   </div>
-                  <select 
-                    value={selectedArtist} 
-                    onChange={(e) => setSelectedArtist(e.target.value)}
-                    className="bg-background text-foreground border border-input rounded-sm px-1 py-0.5 text-[9px] uppercase font-normal tracking-wide max-w-[155px] w-full outline-none cursor-pointer focus:border-primary/50 focus:ring-1 focus:ring-primary/20 dark:bg-input/20"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <option value="all">TODOS</option>
-                    {uniqueArtists.map(artist => (
-                      <option key={artist} value={artist}>{artist}</option>
-                    ))}
-                  </select>
+                  <MultiSelectDropdown
+                    label="TODOS"
+                    options={uniqueArtists.map(artist => ({ id: artist, name: artist }))}
+                    selectedValues={selectedArtists}
+                    onChange={setSelectedArtists}
+                    compact={true}
+                    className="max-w-[155px] w-full"
+                  />
                 </div>
               </TableHead>
-              <TableHead className="text-[11px] uppercase tracking-widest font-bold">
+              <TableHead className="text-[11px] uppercase tracking-widest font-bold border-border">
                 <div className="flex flex-col space-y-1.5 py-1">
-                  <span className="py-0.5">Bloco</span>
-                  <select 
-                    value={selectedBlock} 
-                    onChange={(e) => setSelectedBlock(e.target.value)}
-                    className="bg-background text-foreground border border-input rounded-sm px-1 py-0.5 text-[9px] uppercase font-normal tracking-wide max-w-[130px] w-full outline-none cursor-pointer focus:border-primary/50 focus:ring-1 focus:ring-primary/20 dark:bg-input/20"
+                  <div 
+                    className="flex items-center space-x-1 cursor-pointer hover:text-primary transition-colors"
+                    onClick={() => handleSort('block')}
                   >
-                    <option value="all">TODOS</option>
-                    {availableBlocks.map(block => (
-                      <option key={block.id} value={block.id}>{block.name}</option>
-                    ))}
-                  </select>
+                    <span>Bloco</span>
+                    {sortConfig?.key === 'block' ? (
+                      sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                    ) : <ArrowUpDown className="h-3 w-3 opacity-30" />}
+                  </div>
+                  <MultiSelectDropdown
+                    label="TODOS"
+                    options={availableBlocks.map(block => ({ id: block.id, name: block.name }))}
+                    selectedValues={selectedBlocks}
+                    onChange={setSelectedBlocks}
+                    compact={true}
+                    className="max-w-[130px] w-full"
+                  />
                 </div>
               </TableHead>
               <TableHead 
@@ -846,17 +1158,14 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
                       sortConfig.direction === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
                     ) : <ArrowUpDown className="h-3 w-3 opacity-30" />}
                   </div>
-                  <select 
-                    value={selectedStyle} 
-                    onChange={(e) => setSelectedStyle(e.target.value)}
-                    className="bg-background text-foreground border border-input rounded-sm px-1 py-0.5 text-[9px] uppercase font-normal tracking-wide max-w-[125px] w-full outline-none cursor-pointer focus:border-primary/50 focus:ring-1 focus:ring-primary/20 dark:bg-input/20"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <option value="all">TODOS</option>
-                    {uniqueStyles.map(style => (
-                      <option key={style} value={style}>{style}</option>
-                    ))}
-                  </select>
+                  <MultiSelectDropdown
+                    label="TODOS"
+                    options={uniqueStyles.map(style => ({ id: style, name: style }))}
+                    selectedValues={selectedStyles}
+                    onChange={setSelectedStyles}
+                    compact={true}
+                    className="max-w-[125px] w-full"
+                  />
                 </div>
               </TableHead>
               <TableHead 
@@ -907,17 +1216,25 @@ export function Library({ songs, setSongs, deleteSong, blocks, onPresentSong, on
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onPresentSong(song)} title="Visualizar Música">
                       <Play className="h-4 w-4 text-primary" />
                     </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-500 hover:text-emerald-400" onClick={() => downloadPDF(song)} title="Baixar PDF">
+                      <FileText className="h-4 w-4" />
+                    </Button>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-orange-500 hover:text-orange-400" onClick={() => downloadPPTX(song)} title="Baixar PPTX (PowerPoint)">
+                      <Presentation className="h-4 w-4" />
+                    </Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => onEditSong(song)}>
                       <Edit2 className="h-4 w-4 text-primary" />
                     </Button>
                     <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDeleteConfirmId(song.id)}>
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
-                    <Button variant="ghost" size="icon" className="h-8 w-8" nativeButton={false} render={
-                      <a href={song.driveLink} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-4 w-4 text-primary" />
-                      </a>
-                    } />
+                    {song.driveLink && (
+                      <Button variant="ghost" size="icon" className="h-8 w-8" nativeButton={false} render={
+                        <a href={song.driveLink} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-4 w-4 text-primary" />
+                        </a>
+                      } />
+                    )}
                   </TableCell>
                 </TableRow>
               ))

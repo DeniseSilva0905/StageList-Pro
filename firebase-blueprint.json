@@ -37,7 +37,8 @@
         "id": { "type": "string" },
         "name": { "type": "string" },
         "items": { "type": "array", "items": { "$ref": "#/entities/SetlistItem" } },
-        "createdAt": { "type": "number" }
+        "createdAt": { "type": "number" },
+        "createdBy": { "type": "string" }
       },
       "required": ["id", "name", "items", "createdAt"]
     },
@@ -50,6 +51,20 @@
         "id": { "type": "string" }
       },
       "required": ["type", "id"]
+    },
+    "RegisteredUser": {
+      "title": "RegisteredUser",
+      "description": "A user profile registered by an administrator",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "cpf": { "type": "string" },
+        "role": { "type": "string", "enum": ["Administrador", "Operador"] },
+        "passwordNeedsReset": { "type": "boolean" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["name", "email", "cpf", "role"]
     },
     "AppSettings": {
       "title": "AppSettings",
@@ -81,6 +96,10 @@
     "/users/{userId}/settings/global": {
       "schema": "AppSettings",
       "description": "User's app configuration"
+    },
+    "/registered_users/{userEmail}": {
+      "schema": "RegisteredUser",
+      "description": "Registered users and their roles"
     }
   }
 }

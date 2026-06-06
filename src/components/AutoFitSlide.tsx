@@ -10,6 +10,7 @@ interface AutoFitSlideProps {
   settings?: AppSettings;
   className?: string;
   style?: React.CSSProperties;
+  lineSpacing?: 'single' | '1.5';
 }
 
 export function AutoFitSlide({
@@ -20,7 +21,8 @@ export function AutoFitSlide({
   columns = 1,
   settings,
   className = '',
-  style = {}
+  style = {},
+  lineSpacing = 'single'
 }: AutoFitSlideProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [fittedFontSize, setFittedFontSize] = useState(baseFontSize);
@@ -35,30 +37,45 @@ export function AutoFitSlide({
 
     const checkOverflow = () => {
       if (columns === 2) {
-        // For 2 columns, check if the content spills into a 3rd column (horizontal overflow)
-        return el.scrollWidth > el.clientWidth;
-      } else {
-        // Temporarily reset height to auto to measure natural content height
+        // For 2 columns, check if content spills into 3rd column (horizontal overflow)
+        const isHorizontalOverflow = el.scrollWidth > el.clientWidth + 2;
+        
+        // Also check if content has overflowed vertically beyond unconstrained space
         const originalHeight = el.style.height;
+        const originalMaxHeight = el.style.maxHeight;
         el.style.height = 'auto';
+        el.style.maxHeight = 'none';
+        const totalHeight = el.scrollHeight;
+        el.style.height = originalHeight;
+        el.style.maxHeight = originalMaxHeight;
+        
+        const isVerticalOverflow = totalHeight > (maxHeight * 2) - 10;
+        return isHorizontalOverflow || isVerticalOverflow;
+      } else {
+        // Temporarily reset height and maxHeight to auto/none to measure natural content height
+        const originalHeight = el.style.height;
+        const originalMaxHeight = el.style.maxHeight;
+        el.style.height = 'auto';
+        el.style.maxHeight = 'none';
         const contentHeight = el.scrollHeight;
         el.style.height = originalHeight;
+        el.style.maxHeight = originalMaxHeight;
         
-        // Add a small 2px safety buffer to ignore rounding errors
-        return contentHeight > maxHeight + 2;
+        // Use a tiny 3px buffer under height to be absolutely sure it doesn't clip
+        return contentHeight > maxHeight - 3;
       }
     };
 
     let attempts = 0;
-    // We decrease font size by 1px at a time until it fits
-    while (checkOverflow() && currentFontSize > 12 && attempts < 100) {
-      currentFontSize -= 1;
+    // We decrease font size by 0.5px at a time until it fits
+    while (checkOverflow() && currentFontSize > 12 && attempts < 150) {
+      currentFontSize -= 0.5;
       el.style.fontSize = `${currentFontSize}px`;
       attempts++;
     }
 
     setFittedFontSize(currentFontSize);
-  }, [html, baseFontSize, maxHeight, columns, width]);
+  }, [html, baseFontSize, maxHeight, columns, width, lineSpacing]);
 
   return (
     <div className="relative w-full h-full select-none" style={{ backgroundColor: settings?.presentationBackground || '#000000' }}>
@@ -75,7 +92,7 @@ export function AutoFitSlide({
           columnFill: 'auto',
           color: settings?.presentationTextColor || '#ffffff',
           fontFamily: settings?.presentationFontFamily || 'Inter, sans-serif',
-          lineHeight: '1.0',
+          lineHeight: lineSpacing === '1.5' ? '1.5' : '1.0',
           overflow: 'hidden',
           whiteSpace: 'pre-wrap',
           wordBreak: 'break-word',
@@ -87,15 +104,19 @@ export function AutoFitSlide({
       
       <style>{`
         .auto-fit-slide-content p {
-          margin-bottom: 1.25rem;
-          line-height: 1.0;
+          margin-bottom: ${lineSpacing === '1.5' ? '1.25rem' : '0.3rem'} !important;
+          line-height: ${lineSpacing === '1.5' ? '1.5' : '1.0'} !important;
           padding: 0 ${width < 600 ? '0.75rem' : '2rem'};
           break-inside: ${columns === 2 ? 'avoid-column' : 'auto'};
           max-width: 100%;
           box-sizing: border-box;
         }
+        .auto-fit-slide-content p:empty,
+        .auto-fit-slide-content p:has(br:only-child) {
+          min-height: 1em;
+        }
         .auto-fit-slide-content p:first-child {
-          padding-top: ${width < 600 ? '1rem' : '2rem'};
+          padding-top: ${lineSpacing === '1.5' ? (width < 600 ? '1rem' : '2rem') : '0px'};
         }
         .auto-fit-slide-content p:last-child {
           margin-bottom: 0;
@@ -108,7 +129,7 @@ export function AutoFitSlide({
         /* Alignment */
         .auto-fit-slide-content .text-align-center,
         .auto-fit-slide-content [style*="text-align: center"] {
-          text-align: left !important;
+          text-align: center !important;
         }
         .auto-fit-slide-content .text-align-right,
         .auto-fit-slide-content [style*="text-align: right"] {

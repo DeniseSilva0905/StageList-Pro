@@ -51,6 +51,58 @@
 ::-webkit-scrollbar-thumb:hover {
   background: #444444;
 }
+
+/* Custom scrollbar for specific scroll areas (like dialog lists) */
+.classic-scrollbar {
+  scrollbar-width: auto;
+  scrollbar-color: rgba(0, 0, 0, 0.25) rgba(0, 0, 0, 0.03);
+}
+
+.dark .classic-scrollbar {
+  scrollbar-color: rgba(255, 255, 255, 0.25) rgba(255, 255, 255, 0.03);
+}
+
+.classic-scrollbar::-webkit-scrollbar {
+  width: 10px !important;
+  height: 10px !important;
+  display: block !important;
+}
+
+.classic-scrollbar::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.03) !important;
+  border-radius: 9999px !important;
+}
+
+.classic-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.25) !important;
+  border-radius: 9999px !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
+}
+
+.classic-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.4) !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
+}
+
+/* Dark mode variations */
+.dark .classic-scrollbar::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.03) !important;
+}
+
+.dark .classic-scrollbar::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.25) !important;
+  border-radius: 9999px !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
+}
+
+.dark .classic-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.45) !important;
+  border: 2px solid transparent !important;
+  background-clip: padding-box !important;
+}
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";

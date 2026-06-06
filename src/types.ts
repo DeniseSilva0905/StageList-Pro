@@ -11,6 +11,8 @@ export interface Song {
   fileType?: FileType;
   lyrics?: string;
   columns?: 1 | 2;
+  lyricsFontSize?: number;
+  lineSpacing?: 'single' | '1.5';
 }
 
 export interface BlockSong {
@@ -45,4 +47,10 @@ export interface AppSettings {
   scrollSpeed: number; // 1 to 10 scale
   slideHeightCm?: number;
   presentationFontFamily?: string;
+  bandLogo?: string;
+  bandName?: string;
+  bandMembers?: string;
+  bandContact?: string;
+  bandInstagram?: string;
 }
+

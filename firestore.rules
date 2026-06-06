@@ -15,8 +15,21 @@ service cloud.firestore {
       return isSignedIn() && request.auth.uid == userId;
     }
 
+    function isAdmin() {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/registered_users/$(request.auth.token.email.toLowerCase())) &&
+        get(/databases/$(database)/documents/registered_users/$(request.auth.token.email.toLowerCase())).data.role == 'Administrador';
+    }
+
     function isValidId(id) {
       return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    match /registered_users/{userEmail} {
+      allow get: if isSignedIn() && (request.auth.token.email.toLowerCase() == userEmail.toLowerCase() || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() || (isSignedIn() && request.auth.token.email.toLowerCase() == userEmail.toLowerCase() && !exists(/databases/$(database)/documents/registered_users/$(userEmail.toLowerCase())));
+      allow delete: if isAdmin();
     }
 
     match /users/{userId} {

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Song, Block, Setlist, AppSettings } from '../types';
 import { Button } from './ui/button';
-import { X, Maximize2, Minimize2, Music, ChevronRight, Settings, Search, ArrowUpDown, Minus, Plus, Type, Pencil } from 'lucide-react';
+import { X, Maximize2, Minimize2, Music, ChevronRight, ChevronsLeft, ChevronsRight, Settings, Search, ArrowUpDown, Minus, Plus, Type, Pencil } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Label } from './ui/label';
 import { Input } from './ui/input';
@@ -19,6 +19,8 @@ interface PresentationModeProps {
   onClose: () => void;
   onSaveSong?: (song: Song) => void;
 }
+
+const POWERPOINT_FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 32, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96, 115, 120];
 
 const getSlidesFromHtml = (htmlString: string) => {
   if (!htmlString) return [''];
@@ -40,8 +42,48 @@ const getSlidesFromHtml = (htmlString: string) => {
   return slides.map(s => s.join(''));
 };
 
+const getSlidesColumnsFromHtml = (htmlString: string, defaultColumns: number = 1): number[] => {
+  if (!htmlString || typeof DOMParser === 'undefined') return [defaultColumns];
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(htmlString, 'text/html');
+  const paragraphs = Array.from(doc.body.children);
+  
+  const slidesCount = getSlidesFromHtml(htmlString).length;
+  const cols = Array(slidesCount).fill(defaultColumns);
+  
+  let slideIdx = 0;
+  paragraphs.forEach((p) => {
+    if (p.classList.contains('slide-break')) {
+      const prevColsAttr = p.getAttribute('data-cols-prev');
+      const nextColsAttr = p.getAttribute('data-cols-next');
+      
+      const prevCols = prevColsAttr ? parseInt(prevColsAttr, 10) : null;
+      const nextCols = nextColsAttr ? parseInt(nextColsAttr, 10) : null;
+      
+      if (prevCols && slideIdx < cols.length) {
+        cols[slideIdx] = prevCols;
+      }
+      if (nextCols && slideIdx + 1 < cols.length) {
+        cols[slideIdx + 1] = nextCols;
+      }
+      
+      slideIdx++;
+    }
+  });
+  
+  return cols;
+};
+
 export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSettings, onClose, onSaveSong }: PresentationModeProps) {
   const [activeSongId, setActiveSongId] = useState<string | null>(null);
+  const [playedSongIds, setPlayedSongIds] = useState<string[]>([]);
+
+  React.useEffect(() => {
+    if (activeSongId) {
+      setPlayedSongIds(prev => prev.includes(activeSongId) ? prev : [...prev, activeSongId]);
+    }
+  }, [activeSongId]);
+
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [viewingSong, setViewingSong] = useState<Song | null>(null);
   const [viewingLyrics, setViewingLyrics] = useState<Song | null>(null);
@@ -61,18 +103,53 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
   const [slideDimensions, setSlideDimensions] = useState({ width: 1134, height: 567 });
   const [showPresentationControls, setShowPresentationControls] = useState(true);
   const [isHovererOverHeader, setIsHovererOverHeader] = useState(false);
+
+  const [repertoirePage, setRepertoirePage] = useState(0);
+  const [libraryPage, setLibraryPage] = useState(0);
+
+  const [repertoireScale, setRepertoireScale] = useState(1);
+  const [repertoireSlideDimensions, setRepertoireSlideDimensions] = useState({ width: 1134, height: 567 });
+  const repertoireWrapperRef = React.useRef<HTMLDivElement>(null);
+
+  const [libraryScale, setLibraryScale] = useState(1);
+  const [librarySlideDimensions, setLibrarySlideDimensions] = useState({ width: 1134, height: 567 });
+  const libraryWrapperRef = React.useRef<HTMLDivElement>(null);
+
+  // Return to the scroll position of the active song when exiting presentation/song view
+  React.useEffect(() => {
+    if (!viewingSong && !viewingLyrics && activeSongId) {
+      const timer = setTimeout(() => {
+        const itemElement = document.getElementById(`song-item-${activeSongId}`);
+        if (itemElement) {
+          itemElement.scrollIntoView({ behavior: 'auto', block: 'center' });
+        } else {
+          const fullItemElement = document.getElementById(`song-item-full-${activeSongId}`);
+          if (fullItemElement) {
+            fullItemElement.scrollIntoView({ behavior: 'auto', block: 'center' });
+          }
+        }
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [viewingSong, viewingLyrics, activeSongId]);
   const controlsTimeoutRef = React.useRef<NodeJS.Timeout | null>(null);
 
   const slides = React.useMemo(() => {
     return getSlidesFromHtml(viewingLyrics?.lyrics || '');
   }, [viewingLyrics?.lyrics]);
 
-  // Sync with global font size settings
+  const slideColumns = React.useMemo(() => {
+    return getSlidesColumnsFromHtml(viewingLyrics?.lyrics || '', viewingLyrics?.columns || 1);
+  }, [viewingLyrics?.lyrics, viewingLyrics?.columns]);
+
+  // Sync with global font size settings & individual lyrics font-size
   React.useEffect(() => {
-    if (settings?.presentationFontSize) {
+    if (viewingLyrics) {
+      setLocalFontSize(viewingLyrics.lyricsFontSize || settings?.presentationFontSize || 40);
+    } else if (settings?.presentationFontSize) {
       setLocalFontSize(settings.presentationFontSize);
     }
-  }, [settings?.presentationFontSize]);
+  }, [viewingLyrics, settings?.presentationFontSize]);
 
   // Sync viewingLyrics and viewingSong with live changes from the Firestore subscription
   React.useEffect(() => {
@@ -82,7 +159,9 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
         liveSong.lyrics !== viewingLyrics.lyrics || 
         liveSong.columns !== viewingLyrics.columns || 
         liveSong.title !== viewingLyrics.title || 
-        liveSong.artist !== viewingLyrics.artist
+        liveSong.artist !== viewingLyrics.artist ||
+        liveSong.lyricsFontSize !== viewingLyrics.lyricsFontSize ||
+        liveSong.lineSpacing !== viewingLyrics.lineSpacing
       )) {
         setViewingLyrics(liveSong);
         if (isEditingInPresentation && presenterEditLyrics !== liveSong.lyrics) {
@@ -190,6 +269,70 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
     }
   }, [viewingLyrics, updateScale]);
 
+  const updateRepertoireScale = React.useCallback(() => {
+    if (repertoireWrapperRef.current) {
+      const parentWidth = repertoireWrapperRef.current.clientWidth;
+      const parentHeight = repertoireWrapperRef.current.clientHeight;
+      const isMob = window.innerWidth < 1024;
+      
+      if (isMob) {
+        setRepertoireScale(1);
+        setRepertoireSlideDimensions({ width: parentWidth, height: parentHeight });
+      } else {
+        setRepertoireSlideDimensions({ width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX });
+        const availableWidth = Math.max(100, parentWidth - 32);
+        const availableHeight = Math.max(100, parentHeight - 32);
+        const scaleX = availableWidth / PAGE_WIDTH_PX;
+        const scaleY = availableHeight / PAGE_HEIGHT_PX;
+        const newScale = Math.min(scaleX, scaleY);
+        setRepertoireScale(Math.min(1.5, Math.max(0.2, newScale)));
+      }
+    }
+  }, [PAGE_HEIGHT_PX, PAGE_WIDTH_PX]);
+
+  const updateLibraryScale = React.useCallback(() => {
+    if (libraryWrapperRef.current) {
+      const parentWidth = libraryWrapperRef.current.clientWidth;
+      const parentHeight = libraryWrapperRef.current.clientHeight;
+      const isMob = window.innerWidth < 1024;
+      
+      if (isMob) {
+        setLibraryScale(1);
+        setLibrarySlideDimensions({ width: parentWidth, height: parentHeight });
+      } else {
+        setLibrarySlideDimensions({ width: PAGE_WIDTH_PX, height: PAGE_HEIGHT_PX });
+        const availableWidth = Math.max(100, parentWidth - 32);
+        const availableHeight = Math.max(100, parentHeight - 32);
+        const scaleX = availableWidth / PAGE_WIDTH_PX;
+        const scaleY = availableHeight / PAGE_HEIGHT_PX;
+        const newScale = Math.min(scaleX, scaleY);
+        setLibraryScale(Math.min(1.5, Math.max(0.2, newScale)));
+      }
+    }
+  }, [PAGE_HEIGHT_PX, PAGE_WIDTH_PX]);
+
+  React.useEffect(() => {
+    if (!viewingLyrics && !viewingSong) {
+      if (isViewingFullList) {
+        updateLibraryScale();
+        window.addEventListener('resize', updateLibraryScale);
+        const timer = setTimeout(updateLibraryScale, 100);
+        return () => {
+          window.removeEventListener('resize', updateLibraryScale);
+          clearTimeout(timer);
+        };
+      } else {
+        updateRepertoireScale();
+        window.addEventListener('resize', updateRepertoireScale);
+        const timer = setTimeout(updateRepertoireScale, 100);
+        return () => {
+          window.removeEventListener('resize', updateRepertoireScale);
+          clearTimeout(timer);
+        };
+      }
+    }
+  }, [viewingLyrics, viewingSong, isViewingFullList, updateRepertoireScale, updateLibraryScale]);
+
   React.useEffect(() => {
     if (!viewingLyrics) {
       setShowPresentationControls(true);
@@ -288,7 +431,9 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
       } else {
         const song = songs.find(s => s.id === item.id);
         if (song && hasContent(song)) {
-          list.push({ song, blockName: 'Música Avulsa' });
+          const parentBlock = blocks.find(b => (b.items || []).some(bi => bi.songId === song.id));
+          const blockName = parentBlock ? `${parentBlock.name} (músicas avulsas)` : 'Música Avulsa';
+          list.push({ song, blockName });
         }
       }
     });
@@ -299,25 +444,57 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
     if (!viewingLyrics) return '';
     const currentQueue = customQueue || allSongsInSetlist;
     const currentItem = currentQueue.find(item => item.song.id === viewingLyrics.id);
-    if (currentItem) return currentItem.blockName;
-    
-    // Fallback search in setlist items
-    for (const item of setlist.items) {
-      if (item.type === 'block') {
-        const block = blocks.find(b => b.id === item.id);
-        if (block && block.items?.some(bi => bi.songId === viewingLyrics.id)) {
-          return block.name;
+    let blockName = currentItem ? currentItem.blockName : '';
+    let sequenceStr = '';
+
+    // Find block object & determine sequence of this song inside it
+    const containingBlock = blocks.find(b => b.id === viewingLyrics.id || b.items?.some(bi => bi.songId === viewingLyrics.id));
+    if (containingBlock) {
+      blockName = containingBlock.name;
+      const itemIdx = containingBlock.items?.findIndex(bi => bi.songId === viewingLyrics.id) ?? -1;
+      if (itemIdx !== -1) {
+        const seqNum = String(itemIdx + 1).padStart(2, '0');
+        sequenceStr = ` - Música ${seqNum}`;
+      }
+    } else if (!blockName) {
+      // Fallback search in setlist items
+      for (const item of setlist.items) {
+        if (item.type === 'block') {
+          const block = blocks.find(b => b.id === item.id);
+          if (block && block.items?.some(bi => bi.songId === viewingLyrics.id)) {
+            blockName = block.name;
+            const itemIdx = block.items.findIndex(bi => bi.songId === viewingLyrics.id);
+            if (itemIdx !== -1) {
+              const seqNum = String(itemIdx + 1).padStart(2, '0');
+              sequenceStr = ` - Música ${seqNum}`;
+            }
+            break;
+          }
+        } else if (item.type === 'song' && item.id === viewingLyrics.id) {
+          const parentBlock = blocks.find(b => (b.items || []).some(bi => bi.songId === viewingLyrics.id));
+          blockName = parentBlock ? `${parentBlock.name} (músicas avulsas)` : 'Música Avulsa';
+          break;
         }
-      } else if (item.type === 'song' && item.id === viewingLyrics.id) {
-        return 'Música Avulsa';
       }
     }
-    
-    // Fallback block check
-    const containingBlock = blocks.find(b => b.items?.some(bi => bi.songId === viewingLyrics.id));
-    if (containingBlock) return containingBlock.name;
 
-    return 'Música Avulsa';
+    if (!blockName) {
+      // Last-ditch check using blocks items
+      const mainBlock = blocks.find(b => b.items?.some(bi => bi.songId === viewingLyrics.id));
+      if (mainBlock) {
+        blockName = mainBlock.name;
+        const itemIdx = mainBlock.items?.findIndex(bi => bi.songId === viewingLyrics.id) ?? -1;
+        if (itemIdx !== -1) {
+          const seqNum = String(itemIdx + 1).padStart(2, '0');
+          sequenceStr = ` - Música ${seqNum}`;
+        }
+      } else {
+        const parentBlock = blocks.find(b => (b.items || []).some(bi => bi.songId === viewingLyrics.id));
+        blockName = parentBlock ? `${parentBlock.name} (músicas avulsas)` : 'Música Avulsa';
+      }
+    }
+
+    return `${blockName}${sequenceStr}`;
   }, [viewingLyrics, customQueue, allSongsInSetlist, setlist.items, blocks]);
 
   const getEmbedLink = (link: string) => {
@@ -542,64 +719,6 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
     }
   };
 
-  // Keyboard navigation for Pedal/Keyboards
-  React.useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore keydown handler completely if editing in presentation
-      if (isEditingInPresentation) return;
-
-      // Ignore if user is typing in a search field, color input, or rich text editor
-      const target = e.target as HTMLElement;
-      if (
-        target.tagName === 'INPUT' || 
-        target.tagName === 'TEXTAREA' || 
-        target.isContentEditable || 
-        target.closest('[contenteditable="true"]')
-      ) {
-        return;
-      }
-
-      const nextKeys = ['ArrowRight', 'ArrowDown', 'PageDown', 'Enter', ' '];
-      const prevKeys = ['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'];
-
-      if (showIntroScreen) {
-        if (nextKeys.includes(e.key)) {
-          e.preventDefault();
-          handleNextAction();
-        } else if (prevKeys.includes(e.key)) {
-          e.preventDefault();
-          handlePrevAction();
-        }
-      } else if (viewingLyrics) {
-        if (nextKeys.includes(e.key)) {
-          e.preventDefault();
-          handleNextAction();
-        } else if (prevKeys.includes(e.key)) {
-          e.preventDefault();
-          handlePrevAction();
-        }
-      } else if (viewingSong) {
-        // For files/PDFs, we just use the pedal to go to the next song in the setlist
-        if (nextKeys.includes(e.key)) {
-          e.preventDefault();
-          handleNextSong();
-        }
-      } else if (!isViewingFullList) {
-        // In the main list view, if a song is highlighted, pedal can open it
-        if (activeSongId && (e.key === 'Enter' || e.key === ' ')) {
-          const songToOpen = songs.find(s => s.id === activeSongId);
-          if (songToOpen) {
-            e.preventDefault();
-            handleSongClick(songToOpen);
-          }
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [viewingLyrics, viewingSong, lyricsPage, activeSongId, allSongsInSetlist, isViewingFullList, isEditingInPresentation, showIntroScreen]);
-
   // Auto-scroll logic
   React.useEffect(() => {
     let intervalId: any;
@@ -690,9 +809,12 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
     let list = [...allSongsInSetlist];
     
     if (search) {
+      const searchLower = search.toLowerCase();
       list = list.filter(item => 
-        item.song.title.toLowerCase().includes(search.toLowerCase()) ||
-        item.song.artist.toLowerCase().includes(search.toLowerCase())
+        item.song.title.toLowerCase().includes(searchLower) ||
+        item.song.artist.toLowerCase().includes(searchLower) ||
+        (item.song.style && item.song.style.toLowerCase().includes(searchLower)) ||
+        (item.blockName && item.blockName.toLowerCase().includes(searchLower))
       );
     }
 
@@ -702,6 +824,187 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
 
     return list;
   }, [allSongsInSetlist, search, sortBy]);
+
+  // Reset pages when query changes to prevent empty index bounds
+  React.useEffect(() => {
+    setRepertoirePage(0);
+  }, [search, sortBy]);
+
+  React.useEffect(() => {
+    setLibraryPage(0);
+  }, [search]);
+
+  const repertoirePages = React.useMemo(() => {
+    if (sortBy !== 'order') {
+      // If sorted alphabetically, there are no block dividers. It is a flat list of pages.
+      const itemsPerPage = 8;
+      const pages: Array<{
+        items: Array<{ type: 'song'; song: Song; blockName: string; index: number }>;
+      }> = [];
+      for (let i = 0; i < songsToList.length; i += itemsPerPage) {
+        const slice = songsToList.slice(i, i + itemsPerPage);
+        pages.push({
+          items: slice.map((item, idx) => ({
+            type: 'song',
+            song: item.song,
+            blockName: item.blockName,
+            index: i + idx,
+          })),
+        });
+      }
+      return pages;
+    }
+
+    // Group sorted-by-order songs into blocks
+    interface Group {
+      blockName: string;
+      items: typeof songsToList;
+    }
+    const groups: Group[] = [];
+    songsToList.forEach((item) => {
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup && lastGroup.blockName === item.blockName) {
+        lastGroup.items.push(item);
+      } else {
+        groups.push({ blockName: item.blockName, items: [item] });
+      }
+    });
+
+    const pages: Array<{
+      items: Array<
+        | { type: 'header'; blockName: string }
+        | { type: 'song'; song: Song; blockName: string; index: number }
+      >;
+    }> = [];
+
+    // Fit exactly 3 blocks (groups) per page as requested: "preciso que encaixe 03 blocos completos por página"
+    const blocksPerPage = 3;
+    for (let i = 0; i < groups.length; i += blocksPerPage) {
+      const pageGroups = groups.slice(i, i + blocksPerPage);
+      const pageItems: Array<
+        | { type: 'header'; blockName: string }
+        | { type: 'song'; song: Song; blockName: string; index: number }
+      > = [];
+
+      pageGroups.forEach((group) => {
+        pageItems.push({
+          type: 'header',
+          blockName: group.blockName,
+        });
+
+        group.items.forEach((item) => {
+          pageItems.push({
+            type: 'song',
+            song: item.song,
+            blockName: item.blockName,
+            index: songsToList.findIndex(x => x.song.id === item.song.id),
+          });
+        });
+      });
+
+      pages.push({ items: pageItems });
+    }
+
+    return pages;
+  }, [songsToList, sortBy]);
+
+  const libraryPages = React.useMemo(() => {
+    const filteredSongs = [...songs]
+      .filter(s => {
+        const searchLower = search.toLowerCase().trim();
+        if (!searchLower) return true;
+        
+        const matchesTitle = s.title.toLowerCase().includes(searchLower);
+        const matchesArtist = s.artist ? s.artist.toLowerCase().includes(searchLower) : false;
+        const matchesStyle = s.style ? s.style.toLowerCase().includes(searchLower) : false;
+        const matchesBlock = blocks.some(b => b.name.toLowerCase().includes(searchLower) && (b.items || []).some(item => item.songId === s.id));
+        
+        return matchesTitle || matchesArtist || matchesStyle || matchesBlock;
+      })
+      .sort((a, b) => a.title.localeCompare(b.title));
+
+    const itemsPerPage = 12;
+    const pages: Song[][] = [];
+    for (let i = 0; i < filteredSongs.length; i += itemsPerPage) {
+      pages.push(filteredSongs.slice(i, i + itemsPerPage));
+    }
+    return pages;
+  }, [songs, search, blocks]);
+
+  // Keyboard navigation for Pedal/Keyboards
+  React.useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore keydown handler completely if editing in presentation
+      if (isEditingInPresentation) return;
+
+      // Ignore if user is typing in a search field, color input, or rich text editor
+      const target = e.target as HTMLElement;
+      if (
+        target.tagName === 'INPUT' || 
+        target.tagName === 'TEXTAREA' || 
+        target.isContentEditable || 
+        target.closest('[contenteditable="true"]')
+      ) {
+        return;
+      }
+
+      const nextKeys = ['ArrowRight', 'ArrowDown', 'PageDown', 'Enter', ' '];
+      const prevKeys = ['ArrowLeft', 'ArrowUp', 'PageUp', 'Backspace'];
+
+      if (showIntroScreen) {
+        if (nextKeys.includes(e.key)) {
+          e.preventDefault();
+          handleNextAction();
+        } else if (prevKeys.includes(e.key)) {
+          e.preventDefault();
+          handlePrevAction();
+        }
+      } else if (viewingLyrics) {
+        if (nextKeys.includes(e.key)) {
+          e.preventDefault();
+          handleNextAction();
+        } else if (prevKeys.includes(e.key)) {
+          e.preventDefault();
+          handlePrevAction();
+        }
+      } else if (viewingSong) {
+        // For files/PDFs, we just use the pedal to go to the next song in the setlist
+        if (nextKeys.includes(e.key)) {
+          e.preventDefault();
+          handleNextSong();
+        }
+      } else {
+        // We are on either the full list or repertoire slides list!
+        if (isViewingFullList) {
+          if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+            e.preventDefault();
+            setLibraryPage(prev => Math.min(libraryPages.length - 1, prev + 1));
+          } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+            e.preventDefault();
+            setLibraryPage(prev => Math.max(0, prev - 1));
+          }
+        } else {
+          // Repertoire list slides
+          if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+            e.preventDefault();
+            setRepertoirePage(prev => Math.min(repertoirePages.length - 1, prev + 1));
+          } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+            e.preventDefault();
+            setRepertoirePage(prev => Math.max(0, prev - 1));
+          } else if (activeSongId && (e.key === 'Enter' || e.key === ' ')) {
+            const songToOpen = songs.find(s => s.id === activeSongId);
+            if (songToOpen) {
+              e.preventDefault();
+              handleSongClick(songToOpen);
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [viewingLyrics, viewingSong, lyricsPage, activeSongId, allSongsInSetlist, isViewingFullList, isEditingInPresentation, showIntroScreen, repertoirePage, repertoirePages, libraryPage, libraryPages, songs]);
 
   return (
     <div 
@@ -790,19 +1093,26 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
           <div className="absolute inset-0 z-20 bg-black flex flex-col">
             <div className="p-1 px-4 bg-black border-b border-white/10 flex justify-between items-center h-[50px]">
               <div>
-                <h3 className="text-sm md:text-base font-bold uppercase tracking-widest text-white leading-none">Acervo Musical</h3>
+                <h3 className="text-sm md:text-base font-bold uppercase tracking-widest text-[#39FF14] drop-shadow-[0_0_8px_rgba(57,255,20,0.5)] leading-none">Acervo Musical</h3>
                 <p className="text-[8px] md:text-[10px] text-muted-foreground uppercase tracking-widest mt-1 leading-none opacity-40">Busca Rápida em Toda a Biblioteca</p>
               </div>
               <div className="flex items-center gap-4">
-                <div className="relative w-48 md:w-64 hidden sm:block">
+                <div className="relative w-48 md:w-64">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-white/40" />
                   <Input 
                     placeholder="Filtrar acervo..." 
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
-                    className="pl-10 bg-white/5 border-white/10 h-10 text-xs"
+                    className="pl-10 bg-white/5 border-white/10 h-10 text-xs text-white"
                   />
                 </div>
+                <Button 
+                  variant="outline" 
+                  onClick={() => setIsViewingFullList(false)}
+                  className="bg-orange-600 hover:bg-orange-700 border-orange-500 text-white h-10 text-xs font-bold uppercase tracking-widest px-4 shadow-[0_0_8px_rgba(234,88,12,0.4)] transition-all flex items-center gap-2"
+                >
+                  Retornar ao Repertório
+                </Button>
                 <Button 
                   variant="outline" 
                   onClick={() => setIsViewingFullList(false)}
@@ -812,51 +1122,92 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                 </Button>
               </div>
             </div>
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-              <div className="p-4 md:p-10 max-w-7xl mx-auto">
-                <div className="flex flex-col border-t border-white/10">
-                  {[...songs]
-                    .filter(s => 
-                      s.title.toLowerCase().includes(search.toLowerCase()) || 
-                      s.artist.toLowerCase().includes(search.toLowerCase())
-                    )
-                    .sort((a, b) => a.title.localeCompare(b.title))
-                    .map((song, idx) => {
-                      // Attempt to find if it belongs to any block to show "Bloco" name
-                      const block = blocks.find(b => (b.items || []).some(item => item.songId === song.id));
-                      return (
-                        <div
-                          key={`${song.id}-${idx}`}
-                          onClick={() => handleSongClick(song)}
-                          className="grid grid-cols-12 gap-4 items-center py-2 px-4 border-b border-white/5 hover:bg-white/5 cursor-pointer group transition-colors"
-                        >
-                          <div className="col-span-8 md:col-span-9">
-                            <span className="text-[28px] font-bold text-white tracking-tighter truncate block leading-tight">
-                              {song.title}
-                            </span>
-                          </div>
-                          <div className="col-span-4 md:col-span-3 text-right md:text-left">
-                            {block ? (
-                              <span 
-                                className="text-[28px] text-white opacity-40 hover:opacity-100 hover:text-primary transition-all truncate block tracking-tighter leading-tight font-light cursor-pointer underline decoration-white/10 hover:decoration-primary"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  startBlockPresentation(block);
-                                }}
-                                title={`Ver bloco: ${block.name}`}
-                              >
-                                {block.name}
+            
+            <div ref={libraryWrapperRef} className="flex-1 overflow-hidden relative bg-black flex flex-col">
+              {/* Pagination indicators (<< and >> symbol buttons) */}
+              <div className="absolute top-1/2 left-2 md:left-4 -translate-y-1/2 z-30 opacity-20 hover:opacity-100 transition-opacity text-white">
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => setLibraryPage(prev => Math.max(0, prev - 1))}
+                  disabled={libraryPage === 0}
+                  className="h-12 w-12 md:h-24 md:w-24 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 disabled:opacity-30"
+                >
+                  <span className="text-xl md:text-4xl font-bold">{"<<"}</span>
+                </Button>
+              </div>
+              <div className="absolute top-1/2 right-2 md:right-4 -translate-y-1/2 z-30 opacity-20 hover:opacity-100 transition-opacity text-white">
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => setLibraryPage(prev => Math.min(libraryPages.length - 1, prev + 1))}
+                  disabled={libraryPages.length <= 1 || libraryPage >= libraryPages.length - 1}
+                  className="h-12 w-12 md:h-24 md:w-24 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 disabled:opacity-30"
+                >
+                  <span className="text-xl md:text-4xl font-bold">{">>"}</span>
+                </Button>
+              </div>
+
+              <div className="h-full overflow-hidden p-0 flex items-center justify-center bg-black/40">
+                <div 
+                  className="overflow-hidden shadow-2xl relative flex-shrink-0 origin-center" 
+                  style={{ 
+                    width: `${librarySlideDimensions.width}px`, 
+                    height: `${librarySlideDimensions.height}px`, 
+                    transform: `scale(${libraryScale})`, 
+                    isolation: 'isolate', 
+                    backgroundColor: settings.presentationBackground || '#000000',
+                    border: '2px solid rgba(255, 255, 255, 0.1)'
+                  }}
+                >
+                  <div className="py-1 px-3 flex flex-col h-full uppercase select-none">
+                    <div className="flex-1 flex flex-col justify-center divide-y divide-white/5">
+                      {(libraryPages[libraryPage] || []).map((song, idx) => {
+                        const block = blocks.find(b => (b.items || []).some(item => item.songId === song.id));
+                        return (
+                          <div
+                            key={`lib-song-${song.id}-${idx}`}
+                            onClick={() => handleSongClick(song)}
+                            className="grid grid-cols-12 gap-2 items-center py-1 md:py-1.5 px-2 md:px-3 border-l-4 border-transparent hover:bg-white/5 cursor-pointer group transition-colors"
+                          >
+                            <div className="col-span-8">
+                              <span className={`text-[23px] font-bold tracking-tighter truncate block leading-tight ${
+                                activeSongId === song.id || playedSongIds.includes(song.id)
+                                  ? 'text-purple-400 font-extrabold shadow-purple-500/20' 
+                                  : 'text-white'
+                              }`}>
+                                {song.title}
                               </span>
-                            ) : (
-                              <span className="text-[28px] text-white opacity-40 transition-opacity truncate block tracking-tighter leading-tight font-light italic">
-                                {song.style || 'Livre'}
-                              </span>
-                            )}
+                            </div>
+                            <div className="col-span-4 text-right">
+                              {block ? (
+                                <span 
+                                  className="text-[23px] text-white opacity-40 group-hover:opacity-100 hover:text-[#39FF14] transition-all truncate block tracking-tighter leading-tight font-light"
+                                >
+                                  {block.name}
+                                </span>
+                              ) : (
+                                <span className="text-[23px] text-white opacity-40 transition-opacity truncate block tracking-tighter leading-tight font-light italic">
+                                  {song.style || 'Livre'}
+                                </span>
+                              )}
+                            </div>
                           </div>
+                        );
+                      })}
+                      {(!libraryPages || libraryPages.length === 0) && (
+                        <div className="py-20 text-center text-white/20 text-xs uppercase tracking-widest">
+                          Nenhuma música encontrada para sua busca
                         </div>
-                      );
-                    })
-                  }
+                      )}
+                    </div>
+                    
+                    {/* Slide Footer */}
+                    <div className="mt-auto pt-2 border-t border-white/5 flex justify-between items-center text-[10px] uppercase font-mono tracking-widest text-white/40">
+                      <div>Acervo Completo Da Biblioteca</div>
+                      <div>Página {libraryPage + 1} de {libraryPages.length || 1}</div>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -897,7 +1248,11 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                     setViewingSong(null);
                     setViewingLyrics(null);
                     setLyricsPage(0);
-                    setIsViewingFullList(false);
+                    if (openedFromFullList) {
+                      setIsViewingFullList(true);
+                    } else {
+                      setIsViewingFullList(false);
+                    }
                   }}
                   className="text-[20px] font-bold text-yellow-400 hover:bg-white/10 transition-colors h-full px-4 rounded-none uppercase"
                 >
@@ -1038,7 +1393,11 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                     setViewingLyrics(null);
                     setViewingSong(null);
                     setLyricsPage(0);
-                    setIsViewingFullList(false);
+                    if (openedFromFullList) {
+                      setIsViewingFullList(true);
+                    } else {
+                      setIsViewingFullList(false);
+                    }
                   }}
                   className="text-[9px] md:text-xs font-bold text-yellow-500 hover:bg-white/10 transition-colors h-6 px-1.5 rounded uppercase"
                 >
@@ -1138,9 +1497,9 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                                 size="icon" 
                                 type="button"
                                 onClick={() => {
-                                  const newSize = Math.max(16, localFontSize - 2);
-                                  setLocalFontSize(newSize);
-                                  onUpdateSettings({ ...settings, presentationFontSize: newSize });
+                                  const prevSize = [...POWERPOINT_FONT_SIZES].reverse().find(s => s < localFontSize) || 8;
+                                  setLocalFontSize(prevSize);
+                                  onUpdateSettings({ ...settings, presentationFontSize: prevSize });
                                 }}
                                 className="h-7 w-7 text-zinc-300 hover:text-white hover:bg-zinc-800 rounded cursor-pointer"
                                 title="Diminuir"
@@ -1152,9 +1511,9 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                                 size="icon" 
                                 type="button"
                                 onClick={() => {
-                                  const newSize = Math.min(120, localFontSize + 2);
-                                  setLocalFontSize(newSize);
-                                  onUpdateSettings({ ...settings, presentationFontSize: newSize });
+                                  const nextSize = POWERPOINT_FONT_SIZES.find(s => s > localFontSize) || 120;
+                                  setLocalFontSize(nextSize);
+                                  onUpdateSettings({ ...settings, presentationFontSize: nextSize });
                                 }}
                                 className="h-7 w-7 text-zinc-300 hover:text-white hover:bg-zinc-800 rounded cursor-pointer"
                                 title="Aumentar"
@@ -1326,7 +1685,7 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                           {currentBlockName && (
                             <div 
                               id="neon-block-indicator"
-                              className="text-2xl sm:text-3xl md:text-5xl font-black uppercase tracking-[0.15em] text-[#E5FF00] drop-shadow-[0_0_25px_rgba(229,255,0,0.95)] animate-pulse pb-4"
+                              className="text-[32px] font-black uppercase tracking-[0.15em] text-[#E5FF00] drop-shadow-[0_0_25px_rgba(229,255,0,0.95)] animate-pulse pb-4"
                             >
                               {currentBlockName}
                             </div>
@@ -1357,9 +1716,10 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                         html={slides[lyricsPage] || ''}
                         maxHeight={slideDimensions.height}
                         width={slideDimensions.width}
-                        baseFontSize={localFontSize}
-                        columns={viewingLyrics.columns || 1}
+                        baseFontSize={Math.round(localFontSize * 1.3333)}
+                        columns={(slideColumns[lyricsPage] || 1) as 1 | 2}
                         settings={settings}
+                        lineSpacing={viewingLyrics.lineSpacing || 'single'}
                       />
                     )}
                   </div>
@@ -1367,9 +1727,9 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
               </div>
               <style>{`
                 .lyrics-presentation-content {
-                  font-size: ${localFontSize}px;
+                  font-size: ${Math.round(localFontSize * 1.3333)}px;
                   font-family: ${settings.presentationFontFamily || 'Inter, sans-serif'};
-                  line-height: 1.0;
+                  line-height: ${viewingLyrics?.lineSpacing === '1.5' ? '1.5' : '1.0'};
                   color: ${settings.presentationTextColor || '#ffffff'};
                   text-align: left;
                   white-space: pre-wrap;
@@ -1377,15 +1737,19 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                   overflow-wrap: break-word;
                 }
                 .lyrics-presentation-content p {
-                  margin-bottom: 1.25rem;
-                  line-height: 1.0;
+                  margin-bottom: ${viewingLyrics?.lineSpacing === '1.5' ? '1.25rem' : '0.3rem'} !important;
+                  line-height: ${viewingLyrics?.lineSpacing === '1.5' ? '1.5' : '1.0'} !important;
                   padding: 0 2rem;
-                  break-inside: ${viewingLyrics.columns === 2 ? 'avoid-column' : 'auto'};
+                  break-inside: ${(slideColumns[lyricsPage] || 1) === 2 ? 'avoid-column' : 'auto'};
                   max-width: 100%;
                   box-sizing: border-box;
                 }
+                .lyrics-presentation-content p:empty,
+                .lyrics-presentation-content p:has(br:only-child) {
+                  min-height: 1em;
+                }
                 .lyrics-presentation-content p:first-child {
-                  padding-top: 2rem;
+                  padding-top: ${viewingLyrics?.lineSpacing === '1.5' ? '2rem' : '1rem'};
                 }
                 /* Empty lines and slide-break classes act as slide page breaks in presentation views */
                 .lyrics-presentation-content p.slide-break {
@@ -1406,7 +1770,7 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
                 }
                 /* Tiptap Alignment Classes */
                 .lyrics-presentation-content .text-align-center {
-                  text-align: left;
+                  text-align: center;
                 }
                 .lyrics-presentation-content .text-align-right {
                   text-align: right;
@@ -1455,71 +1819,236 @@ export function PresentationMode({ setlist, songs, blocks, settings, onUpdateSet
               </div>
             </div>
             
-            <div className="flex-1 overflow-y-auto custom-scrollbar">
-              <div className="max-w-7xl mx-auto px-4 md:px-8 pb-20">
-                {/* Table Header - hidden or very small as per user request to tighten */}
-                <div className="grid grid-cols-12 gap-4 px-6 py-2 border-b border-white/10 uppercase tracking-[0.2em] text-[10px] opacity-20 font-bold hidden md:grid">
-                  <div className="col-span-4">Bloco</div>
-                  <div className="col-span-8">Música</div>
-                </div>
+            <div ref={repertoireWrapperRef} className="flex-1 overflow-hidden relative bg-black flex flex-col">
+              {/* Pagination elements outer buttons */}
+              <div className="absolute top-1/2 left-2 md:left-4 -translate-y-1/2 z-30 opacity-20 hover:opacity-100 transition-opacity text-white">
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => setRepertoirePage(prev => Math.max(0, prev - 1))}
+                  disabled={repertoirePage === 0}
+                  className="h-12 w-12 md:h-24 md:w-24 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 disabled:opacity-30"
+                >
+                  <span className="text-xl md:text-4xl font-bold">{"<<"}</span>
+                </Button>
+              </div>
+              <div className="absolute top-1/2 right-2 md:right-4 -translate-y-1/2 z-30 opacity-20 hover:opacity-100 transition-opacity text-white">
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => setRepertoirePage(prev => Math.min(repertoirePages.length - 1, prev + 1))}
+                  disabled={repertoirePages.length <= 1 || repertoirePage >= repertoirePages.length - 1}
+                  className="h-12 w-12 md:h-24 md:w-24 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 disabled:opacity-30"
+                >
+                  <span className="text-xl md:text-4xl font-bold">{">>"}</span>
+                </Button>
+              </div>
 
-                <div className="mt-1 divide-y divide-white/5">
-                  {songsToList.map(({ song, blockName }, index) => (
-                    <div 
-                      key={`${song.id}-${index}`}
-                      className={`group grid grid-cols-1 md:grid-cols-12 gap-1 md:gap-4 items-center px-4 md:px-6 py-1 transition-all cursor-pointer ${
-                        activeSongId === song.id 
-                          ? 'bg-primary/30' 
-                          : 'hover:bg-white/5'
-                      }`}
-                      onClick={() => handleSongClick(song)}
-                    >
-                      {/* Block Name Column */}
-                      <div className="col-span-1 md:col-span-4">
-                        {blockName && blockName !== 'Música Avulsa' ? (
-                          <span 
-                            className="font-light tracking-tighter text-[32px] text-white opacity-40 hover:opacity-100 transition-all truncate block leading-tight cursor-pointer hover:text-primary underline decoration-white/5"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              const block = blocks.find(b => b.name === blockName);
-                              if (block) startBlockPresentation(block);
-                            }}
-                          >
-                            {blockName}
-                          </span>
-                        ) : (
-                          <span className="font-light tracking-tighter text-[32px] text-white opacity-10 block">-</span>
-                        )}
-                      </div>
+              <div className="h-full overflow-hidden p-0 flex items-center justify-center bg-black/40">
+                <div 
+                  className="overflow-hidden shadow-2xl relative flex-shrink-0 origin-center" 
+                  style={{ 
+                    width: `${repertoireSlideDimensions.width}px`, 
+                    height: `${repertoireSlideDimensions.height}px`, 
+                    transform: `scale(${repertoireScale})`, 
+                    isolation: 'isolate', 
+                    backgroundColor: settings.presentationBackground || '#000000',
+                    border: '2px solid rgba(255, 255, 255, 0.1)'
+                  }}
+                >
+                  <div className="pt-[2px] pb-[2px] px-6 flex flex-col h-full uppercase select-none">
+                    <div className="flex-1 flex flex-col justify-start divide-y divide-white/5 overflow-hidden">
+                      {(() => {
+                        const pageItems = repertoirePages[repertoirePage]?.items || [];
+                        const pageItemsCount = pageItems.length;
 
-                      {/* Song Title Column */}
-                      <div className="col-span-1 md:col-span-8 flex items-center justify-between">
-                        <div className="flex items-center gap-4 truncate">
-                          <h3 className={`font-bold tracking-tighter text-[32px] text-white truncate leading-tight ${activeSongId === song.id ? 'text-primary' : ''}`}>
-                            {(() => {
-                              const block = blocks.find(b => b.name === blockName);
-                              const blockItem = block?.items?.find(bi => bi.songId === song.id);
-                              if (blockItem?.sequence) return <span className="text-white/40 mr-2 font-mono text-2xl">{blockItem.sequence}</span>;
-                              return null;
-                            })()}
-                            {song.title} {(() => {
-                              const libBlock = blocks.find(b => b.items?.some(item => item.songId === song.id));
-                              if (libBlock) {
-                                return <span className="font-light opacity-60 ml-2">({libBlock.name})</span>;
-                              }
-                              return null;
-                            })()}
-                          </h3>
+                        // Derive sizes based on density to prevent any vertical overflow or cut-offs
+                        let titleSizeClass = 'text-[26px] md:text-[32px]';
+                        let headerSizeClass = 'text-[32px]';
+                        let numSizeClass = 'text-3xl';
+                        let blockLabelSizeClass = 'text-base';
+                        let pyClass = 'py-3';
+                        let headerPyClass = 'py-3.5';
+
+                        if (pageItemsCount > 15) {
+                          titleSizeClass = 'text-[13px] md:text-[16px]';
+                          headerSizeClass = 'text-[18px]';
+                          numSizeClass = 'text-xs';
+                          blockLabelSizeClass = 'text-[9px]';
+                          pyClass = 'py-[1.5px]';
+                          headerPyClass = 'py-1';
+                        } else if (pageItemsCount > 12) {
+                          titleSizeClass = 'text-[16px] md:text-[19px]';
+                          headerSizeClass = 'text-[20px]';
+                          numSizeClass = 'text-sm';
+                          blockLabelSizeClass = 'text-[10px]';
+                          pyClass = 'py-[3px]';
+                          headerPyClass = 'py-1.5';
+                        } else if (pageItemsCount > 9) {
+                          titleSizeClass = 'text-[20px] md:text-[23px]';
+                          headerSizeClass = 'text-[24px]';
+                          numSizeClass = 'text-xl';
+                          blockLabelSizeClass = 'text-xs';
+                          pyClass = 'py-1.5';
+                          headerPyClass = 'py-2';
+                        } else if (pageItemsCount > 6) {
+                          titleSizeClass = 'text-[23px] md:text-[27px]';
+                          headerSizeClass = 'text-[28px]';
+                          numSizeClass = 'text-2xl';
+                          blockLabelSizeClass = 'text-sm';
+                          pyClass = 'py-2';
+                          headerPyClass = 'py-2.5';
+                        }
+
+                        return pageItems.map((item, idx) => {
+                          if (item.type === 'header') {
+                            return (
+                              <div key={`rep-header-${idx}`} className={`${headerPyClass} px-4 flex items-center justify-between gap-4 pointer-events-none select-none`}>
+                                <div className="h-[2px] flex-1 bg-[#39FF14] shadow-[0_0_12px_#39FF14,0_0_4px_#39FF14] rounded-full" />
+                                <div className="flex items-baseline font-sans drop-shadow-[0_0_8px_rgba(57,255,20,0.5)] whitespace-nowrap">
+                                  {(() => {
+                                    const hasAvulsas = item.blockName?.endsWith(' (músicas avulsas)');
+                                    const displayName = hasAvulsas ? item.blockName.replace(/\s*\((músicas?\s+avulsas?)\)/i, '') : item.blockName;
+                                    const isAvulsa = item.blockName === 'Música Avulsa' || item.blockName === 'Músicas Avulsas';
+                                    return (
+                                      <>
+                                        <span className={`${headerSizeClass} font-extrabold tracking-[0.3em] text-[#39FF14] uppercase`}>
+                                          {displayName && !isAvulsa ? displayName : 'Músicas'}
+                                        </span>
+                                        {(hasAvulsas || isAvulsa) && (
+                                          <span className="text-[14px] font-medium tracking-normal text-[#39FF14]/80 lowercase pl-2">
+                                            (músicas avulsas)
+                                          </span>
+                                        )}
+                                      </>
+                                    );
+                                  })()}
+                                </div>
+                                <div className="h-[2px] flex-1 bg-[#39FF14] shadow-[0_0_12px_#39FF14,0_0_4px_#39FF14] rounded-full" />
+                              </div>
+                            );
+                          } else {
+                            const song = item.song;
+                            const blockName = item.blockName;
+                            return (
+                              <div 
+                                key={`rep-song-${song.id}-${idx}`}
+                                className={`group grid grid-cols-12 gap-4 items-center w-full ${pyClass} px-6 transition-all cursor-pointer ${
+                                  activeSongId === song.id 
+                                    ? 'bg-primary/30 border-l-4 border-primary pl-5' 
+                                    : 'hover:bg-white/5 border-l-4 border-transparent'
+                                }`}
+                                onClick={() => handleSongClick(song)}
+                              >
+                                {/* Block Name Column (Left Column) */}
+                                <div className="col-span-4">
+                                  {blockName && blockName !== 'Música Avulsa' ? (
+                                    <div className="flex items-baseline gap-2">
+                                      {(() => {
+                                        const hasAvulsas = blockName?.endsWith(' (músicas avulsas)');
+                                        const displayName = hasAvulsas ? blockName.replace(/\s*\((músicas?\s+avulsas?)\)/i, '') : blockName;
+                                        return (
+                                          <>
+                                            <span className={`font-light tracking-tighter ${titleSizeClass} text-white opacity-40 group-hover:opacity-100 transition-all truncate block leading-tight`}>
+                                              {displayName}
+                                            </span>
+                                            {hasAvulsas && (
+                                              <span className={`font-normal text-white/30 lowercase ${blockLabelSizeClass} whitespace-nowrap`}>
+                                                (avulsas)
+                                              </span>
+                                            )}
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+                                  ) : (
+                                    <span className={`font-light tracking-tighter ${titleSizeClass} text-white opacity-10 block`}>-</span>
+                                  )}
+                                </div>
+
+                                {/* Song Title Column (Right Column) */}
+                                <div className="col-span-8 flex items-center justify-between">
+                                  <div className="flex items-center gap-4">
+                                    <h3 className={`font-bold tracking-tighter leading-tight ${
+                                      activeSongId === song.id || playedSongIds.includes(song.id)
+                                        ? 'text-purple-400 font-extrabold shadow-purple-500/20' 
+                                        : 'text-white'
+                                    }`}>
+                                      <div className="flex items-start">
+                                        {(() => {
+                                          const cleanName = blockName?.replace(/\s*\((músicas?\s+avulsas?)\)/i, '');
+                                          const block = blocks.find(b => b.name === cleanName || b.name === blockName);
+                                          const blockItem = block?.items?.find(bi => bi.songId === song.id);
+                                          if (blockItem?.sequence) return <span className={`text-white/40 mr-2.5 font-mono ${numSizeClass} mt-0.5`}>{blockItem.sequence}</span>;
+                                          return null;
+                                        })()}
+                                        <div className="flex flex-col">
+                                          {(() => {
+                                            const parts = song.title.split('-');
+                                            const libBlock = blocks.find(b => b.items?.some(it => it.songId === song.id));
+                                            
+                                            // Clean up block name from ending avulsas
+                                            const originalBlockName = libBlock ? libBlock.name : '';
+                                            const blockLabel = originalBlockName 
+                                              ? `(${originalBlockName.replace(/\s*\((músicas?\s+avulsas?)\)/i, '')})` 
+                                              : '';
+
+                                            if (parts.length > 1) {
+                                              return parts.map((part, pIdx) => {
+                                                const isLast = pIdx === parts.length - 1;
+                                                return (
+                                                  <span key={pIdx} className={`block leading-tight ${titleSizeClass} whitespace-pre-wrap`}>
+                                                    {pIdx > 0 ? `- ${part.trim()}` : part.trim()}
+                                                    {isLast && blockLabel && (
+                                                      <span className={`inline font-light opacity-60 ${blockLabelSizeClass} ml-2 whitespace-nowrap lower-case-label`}>
+                                                        {blockLabel}
+                                                      </span>
+                                                    )}
+                                                  </span>
+                                                );
+                                              });
+                                            }
+                                            return (
+                                              <span className={`leading-tight ${titleSizeClass} whitespace-pre-wrap`}>
+                                                {song.title}
+                                                {blockLabel && (
+                                                  <span className={`inline font-light opacity-60 ${blockLabelSizeClass} ml-2 whitespace-nowrap lower-case-label`}>
+                                                    {blockLabel}
+                                                  </span>
+                                                )}
+                                              </span>
+                                            );
+                                          })()}
+                                        </div>
+                                      </div>
+                                    </h3>
+                                  </div>
+                                  {activeSongId === song.id && <ChevronRight className="h-6 w-6 text-primary flex-shrink-0 ml-2" />}
+                                </div>
+                              </div>
+                            );
+                          }
+                        });
+                      })()}
+                      {songsToList.length === 0 && (
+                        <div className="py-20 text-center text-white/20 text-xs uppercase tracking-widest">
+                          Nenhuma música encontrada para sua busca
                         </div>
-                        {activeSongId === song.id && <ChevronRight className="h-6 w-6 text-primary flex-shrink-0" />}
+                      )}
+                    </div>
+
+                    {/* Absolute Orange Targetas (Página Inicial / Página Final) */}
+                    {repertoirePage === 0 && (
+                      <div className="absolute bottom-2.5 right-6 bg-orange-600 border border-orange-500/30 text-[9px] text-white font-bold tracking-widest px-2.5 py-0.5 rounded shadow-[0_0_8px_rgba(234,88,12,0.4)] pointer-events-none uppercase">
+                        Página Inicial
                       </div>
-                    </div>
-                  ))}
-                  {songsToList.length === 0 && (
-                    <div className="py-20 text-center text-white/20 text-xs uppercase tracking-widest">
-                      Nenhuma música encontrada para sua busca
-                    </div>
-                  )}
+                    )}
+                    {repertoirePage === repertoirePages.length - 1 && (
+                      <div className="absolute bottom-2.5 right-6 bg-orange-600 border border-orange-500/30 text-[9px] text-white font-bold tracking-widest px-2.5 py-0.5 rounded shadow-[0_0_8px_rgba(234,88,12,0.4)] pointer-events-none uppercase">
+                        Página Final
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

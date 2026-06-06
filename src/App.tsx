@@ -37,7 +37,9 @@ import {
   Monitor,
   Smartphone,
   Mail,
-  Lock
+  Lock,
+  Instagram,
+  Users
 } from 'lucide-react';
 import { usePWA } from './hooks/usePWA';
 import { Button } from './components/ui/button';
@@ -53,7 +55,8 @@ import {
   signInWithEmailLink,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  sendPasswordResetEmail
+  sendPasswordResetEmail,
+  updatePassword
 } from 'firebase/auth';
 
 type View = 'dashboard' | 'library' | 'blocks' | 'explorer' | 'setlists' | 'repertoire' | 'settings' | 'edit-song';
@@ -72,6 +75,8 @@ export default function App() {
   const [currentView, setCurrentView] = useState<View>('dashboard');
   const [presentingSetlist, setPresentingSetlist] = useState<Setlist | null>(null);
   const [editingSong, setEditingSong] = useState<Song | null>(null);
+  const [isSongEditorOpen, setIsSongEditorOpen] = useState(false);
+  const [editSongReturnView, setEditSongReturnView] = useState<View>('library');
   const [initialEditSetlist, setInitialEditSetlist] = useState<Setlist | null>(null);
   const [comeFromRepertoire, setComeFromRepertoire] = useState<boolean>(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -250,7 +255,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => { setLoginMethod('google'); setEmailLinkSent(false); }}
-              className={`py-3 text-[9px] uppercase font-bold tracking-wider transition-all rounded-none leading-none ${
+              className={`py-3 text-[9px] uppercase font-bold tracking-wider transition-all rounded-none leading-none cursor-pointer ${
                 loginMethod === 'google' 
                   ? 'bg-background text-primary border border-border/80 shadow-md font-black' 
                   : 'text-muted-foreground hover:text-white hover:bg-muted-foreground/5'
@@ -261,7 +266,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => { setLoginMethod('email-link'); setEmailLinkSent(false); }}
-              className={`py-3 text-[9px] uppercase font-bold tracking-wider transition-all rounded-none leading-none ${
+              className={`py-3 text-[9px] uppercase font-bold tracking-wider transition-all rounded-none leading-none cursor-pointer ${
                 loginMethod === 'email-link' 
                   ? 'bg-background text-[#39FF14] border border-border/80 shadow-md font-black' 
                   : 'text-muted-foreground hover:text-white hover:bg-muted-foreground/5'
@@ -272,7 +277,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => { setLoginMethod('password'); setEmailLinkSent(false); }}
-              className={`py-3 text-[9px] uppercase font-bold tracking-wider transition-all rounded-none leading-none ${
+              className={`py-3 text-[9px] uppercase font-bold tracking-wider transition-all rounded-none leading-none cursor-pointer ${
                 loginMethod === 'password' 
                   ? 'bg-background text-yellow-400 border border-border/80 shadow-md font-black' 
                   : 'text-muted-foreground hover:text-white hover:bg-muted-foreground/5'
@@ -293,7 +298,7 @@ export default function App() {
                 <Button 
                   onClick={handleLogin}
                   disabled={authSubmitting}
-                  className="w-full rounded-none py-6 h-auto text-xs font-bold border-2 border-primary hover:bg-primary hover:text-white transition-all group shrink-0"
+                  className="w-full rounded-none py-6 h-auto text-xs font-bold border-2 border-primary hover:bg-primary hover:text-white transition-all group shrink-0 cursor-pointer"
                 >
                   {authSubmitting ? (
                     <Loader2 className="h-5 w-5 mr-3 animate-spin text-white" />
@@ -327,7 +332,7 @@ export default function App() {
                     <button 
                       type="button" 
                       onClick={() => setEmailLinkSent(false)}
-                      className="text-[10px] text-primary uppercase font-bold tracking-widest hover:underline pt-2 inline-block mx-auto text-center w-full"
+                      className="text-[10px] text-primary uppercase font-bold tracking-widest hover:underline pt-2 inline-block mx-auto text-center w-full cursor-pointer"
                     >
                       ← Alterar e-mail de envio
                     </button>
@@ -356,7 +361,7 @@ export default function App() {
                     <Button 
                       type="submit"
                       disabled={authSubmitting}
-                      className="w-full rounded-none py-5 h-auto text-xs font-bold bg-[#39FF14] text-black hover:bg-[#39FF14]/90 hover:shadow-[0_0_15px_rgba(57,255,20,0.3)] transition-all uppercase tracking-widest"
+                      className="w-full rounded-none py-5 h-auto text-xs font-bold bg-[#39FF14] text-black hover:bg-[#39FF14]/90 hover:shadow-[0_0_15px_rgba(57,255,20,0.3)] transition-all uppercase tracking-widest cursor-pointer"
                     >
                       {authSubmitting ? (
                         <>
@@ -402,7 +407,7 @@ export default function App() {
                           type="button"
                           onClick={handleForgotPassword}
                           disabled={authSubmitting}
-                          className="text-[9px] text-[#39FF14] hover:underline uppercase tracking-wider"
+                          className="text-[9px] text-[#39FF14] hover:underline uppercase tracking-wider cursor-pointer"
                         >
                           Esqueci a Senha
                         </button>
@@ -438,7 +443,7 @@ export default function App() {
                 <Button 
                   type="submit"
                   disabled={authSubmitting}
-                  className="w-full rounded-none py-5 h-auto text-xs font-bold bg-yellow-400 text-black hover:bg-yellow-400/90 hover:shadow-[0_0_15px_rgba(234,179,8,0.3)] transition-all uppercase tracking-widest"
+                  className="w-full rounded-none py-5 h-auto text-xs font-bold bg-yellow-400 text-black hover:bg-yellow-400/90 hover:shadow-[0_0_15px_rgba(234,179,8,0.3)] transition-all uppercase tracking-widest cursor-pointer"
                 >
                   {authSubmitting ? (
                     <>
@@ -468,15 +473,20 @@ export default function App() {
     setPresentingSetlist(mockSetlist);
   };
 
-  const handleEditSong = (song: Song | null) => {
+  const handleEditSong = (song: Song | null, returnView: View = 'library') => {
     setEditingSong(song);
-    setCurrentView('edit-song');
+    setEditSongReturnView(returnView);
+    setIsSongEditorOpen(true);
   };
 
-  const handleSaveSong = (updatedSong: Song) => {
+  const handleSaveSong = (updatedSong: Song, closeAfterSave = true) => {
     saveSong(updatedSong);
-    setCurrentView('library');
-    setEditingSong(null);
+    if (closeAfterSave) {
+      setIsSongEditorOpen(false);
+      setEditingSong(null);
+    } else {
+      setEditingSong(updatedSong);
+    }
   };
 
   const renderView = () => {
@@ -487,10 +497,81 @@ export default function App() {
             <div className="flex flex-col space-y-2">
               <h1 className="text-4xl font-light tracking-tight uppercase">Dashboard</h1>
               <div className="h-1 w-20 bg-primary"></div>
-              <p className="text-muted-foreground text-sm uppercase tracking-widest pt-2">Visão geral do sistema</p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0 border border-border">
+            {/* Band / Team Hero Card */}
+            <div className="p-6 md:p-8 border border-border bg-card/40 relative overflow-hidden flex flex-col md:flex-row items-center gap-6 md:gap-8 rounded-none backdrop-blur-sm">
+              <div className="absolute top-0 left-0 right-0 h-[2.5px] bg-gradient-to-r from-primary via-cyan-400 to-[#39FF14]" />
+              
+              {/* Logo Box */}
+              <div className="w-28 h-28 sm:w-32 sm:h-32 shrink-0 border border-border/80 bg-background/50 flex items-center justify-center p-2 relative overflow-hidden group shadow-lg">
+                {settings.bandLogo ? (
+                  <img src={settings.bandLogo} alt="Logo da Banda" className="max-w-full max-h-full object-contain" />
+                ) : (
+                  <div className="text-center space-y-1 p-2">
+                    <Users className="h-6 w-6 text-primary mx-auto opacity-75" />
+                    <p className="text-[8px] uppercase tracking-widest text-muted-foreground font-black">StageList Pro</p>
+                  </div>
+                )}
+              </div>
+
+              {/* Band Info */}
+              <div className="flex-1 text-center md:text-left space-y-4 w-full">
+                <div className="space-y-1">
+                  <span className="text-[9px] uppercase tracking-widest font-black text-[#39FF14] bg-[#39FF14]/10 border border-[#39FF14]/20 px-2 py-0.5 inline-block">
+                    Perfil da Banda/Equipe
+                  </span>
+                  <h2 className="text-2xl md:text-3xl font-black uppercase tracking-tight text-white leading-tight">
+                    {settings.bandName || "Minha Banda / Equipe"}
+                  </h2>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-y-3 gap-x-6 pt-3 border-t border-border/40 text-[11px] uppercase tracking-wider">
+                  <div className="space-y-0.5">
+                    <span className="text-[8px] text-muted-foreground font-extrabold block">Integrantes & Vozes</span>
+                    <p className="text-zinc-200 font-bold truncate leading-relaxed">
+                      {settings.bandMembers || "Ainda não definido nas configurações"}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[8px] text-muted-foreground font-extrabold block">Contato / Telefone</span>
+                    <p className="text-zinc-200 font-bold truncate leading-relaxed">
+                      {settings.bandContact || "Ainda não definido"}
+                    </p>
+                  </div>
+                  <div className="space-y-0.5">
+                    <span className="text-[8px] text-muted-foreground font-extrabold block">Instagram</span>
+                    {settings.bandInstagram ? (
+                      <a 
+                        href={`https://instagram.com/${settings.bandInstagram.replace('@', '')}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-cyan-400 font-bold hover:underline flex items-center justify-center md:justify-start gap-1"
+                      >
+                        <Instagram className="h-3.5 w-3.5 shrink-0" />
+                        {settings.bandInstagram}
+                      </a>
+                    ) : (
+                      <p className="text-zinc-400 italic font-bold">@instadabanda</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Profile Config Button */}
+              <div className="shrink-0 w-full md:w-auto self-stretch flex items-end justify-center md:justify-end">
+                <Button 
+                  onClick={() => setCurrentView('settings')}
+                  className="rounded-none border-primary/30 hover:border-primary/80 text-primary border text-[9px] uppercase font-bold tracking-widest py-3 px-5 h-auto w-full md:w-auto select-none cursor-pointer bg-transparent hover:bg-primary/5 transition-all"
+                >
+                  CONFIGURAR BANDA
+                </Button>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-muted-foreground text-sm uppercase tracking-widest">Visão geral do sistema</p>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-0 border border-border">
               <CardStat 
                 title="Músicas" 
                 value={songs.length} 
@@ -516,6 +597,7 @@ export default function App() {
                 onClick={() => setCurrentView('library')}
               />
             </div>
+          </div>
 
             {/* PWA Download Banner */}
             <div className="p-8 border border-border bg-card/40 flex flex-col md:flex-row items-center justify-between gap-6 relative overflow-hidden group">
@@ -580,29 +662,18 @@ export default function App() {
           />
         );
       case 'edit-song':
-        return (
-          <SongEditor 
-            song={editingSong} 
-            songs={songs} 
-            onSave={handleSaveSong} 
-            onCancel={() => {
-              setCurrentView('library');
-              setEditingSong(null);
-            }} 
-            settings={settings}
-            onUpdateSettings={setSettings}
-          />
-        );
+        return null;
       case 'blocks':
         return <Blocks songs={songs} setSongs={setSongs} blocks={blocks} saveBlock={saveBlock} deleteBlock={deleteBlock} setBlocks={setBlocks} />;
       case 'explorer':
-        return <BlockExplorer songs={songs} blocks={blocks} />;
+        return <BlockExplorer songs={songs} blocks={blocks} settings={settings} />;
       case 'setlists':
         return (
           <SetlistBuilder 
             songs={songs} 
             setSongs={setSongs}
             saveSong={saveSong}
+            onEditSong={(song) => handleEditSong(song, 'setlists')}
             blocks={blocks} 
             setlists={setlists} 
             saveSetlist={saveSetlist}
@@ -639,6 +710,7 @@ export default function App() {
             deleteSetlist={deleteSetlist}
             setSetlists={setSetlists}
             onPresent={setPresentingSetlist}
+            settings={settings}
             onEdit={(sl) => {
               setInitialEditSetlist(sl);
               setComeFromRepertoire(true);
@@ -647,7 +719,15 @@ export default function App() {
           />
         );
       case 'settings':
-        return <Settings settings={settings} setSettings={setSettings} user={user} onLogout={handleLogout} onResetData={clearBlocksAndSetlists} />;
+        return (
+          <Settings 
+            settings={settings} 
+            setSettings={setSettings} 
+            user={user} 
+            onLogout={handleLogout} 
+            onResetData={clearBlocksAndSetlists} 
+          />
+        );
       default:
         return null;
     }
@@ -781,6 +861,23 @@ export default function App() {
           onClose={() => setPresentingSetlist(null)}
           onSaveSong={saveSong}
         />
+      )}
+
+      {/* Song Editor Overlay */}
+      {isSongEditorOpen && (
+        <div className="fixed inset-0 z-[60] bg-background">
+          <SongEditor 
+            song={editingSong} 
+            songs={songs} 
+            onSave={handleSaveSong} 
+            onCancel={() => {
+              setIsSongEditorOpen(false);
+              setEditingSong(null);
+            }} 
+            settings={settings}
+            onUpdateSettings={setSettings}
+          />
+        </div>
       )}
 
       {/* Guide to Install App Modal */}

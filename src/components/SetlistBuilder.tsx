@@ -20,6 +20,7 @@ interface SetlistBuilderProps {
   songs: Song[];
   setSongs: (songs: Song[]) => void;
   saveSong: (song: Song) => void;
+  onEditSong?: (song: Song) => void;
   blocks: Block[];
   setlists: Setlist[];
   saveSetlist: (setlist: Setlist) => void;
@@ -38,6 +39,7 @@ export function SetlistBuilder({
   songs, 
   setSongs, 
   saveSong, 
+  onEditSong,
   blocks, 
   setlists, 
   saveSetlist, 
@@ -53,6 +55,7 @@ export function SetlistBuilder({
 }: SetlistBuilderProps) {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [viewingSongLyrics, setViewingSongLyrics] = useState<Song | null>(null);
+  const [removeItemConfirmIdx, setRemoveItemConfirmIdx] = useState<number | null>(null);
   const [isEditingLyrics, setIsEditingLyrics] = useState(false);
   const [formLyrics, setFormLyrics] = useState('');
   const [formColumns, setFormColumns] = useState<1 | 2>(1);
@@ -86,6 +89,17 @@ export function SetlistBuilder({
     );
   };
 
+  const expandAllBuilderBlocks = () => {
+    const keys = (currentSetlist.items || [])
+      .map((item, index) => item.type === 'block' ? `${item.id}-${index}` : null)
+      .filter((k): k is string => k !== null);
+    setExpandedBuilderBlockKeys(keys);
+  };
+
+  const collapseAllBuilderBlocks = () => {
+    setExpandedBuilderBlockKeys([]);
+  };
+
   const getBlockStyles = React.useCallback((block: Block) => {
     const blockSongs = (block.items || [])
       .map(item => songs.find(s => s.id === item.songId))
@@ -100,31 +114,59 @@ export function SetlistBuilder({
   }, [songs]);
 
   const uncategorizedSongs = React.useMemo(() => {
+    const searchLower = songSearch.toLowerCase().trim();
     const songIdsInBlocks = new Set(blocks.flatMap(b => (b.items || []).map(i => i.songId)));
     return songs.filter(s => !songIdsInBlocks.has(s.id)).filter(song => {
       const matchesStyle = styleFilter === 'all' || song.style === styleFilter;
-      const matchesSearch = song.title.toLowerCase().includes(songSearch.toLowerCase()) || 
-                           song.artist.toLowerCase().includes(songSearch.toLowerCase());
-      return matchesStyle && matchesSearch;
+      if (!matchesStyle) return false;
+      if (!searchLower) return true;
+
+      const matchesSongTitle = song.title.toLowerCase().includes(searchLower);
+      const matchesSongArtist = song.artist ? song.artist.toLowerCase().includes(searchLower) : false;
+      const matchesSongStyle = song.style ? song.style.toLowerCase().includes(searchLower) : false;
+
+      return matchesSongTitle || matchesSongArtist || matchesSongStyle;
     }).sort((a, b) => a.title.localeCompare(b.title));
   }, [songs, blocks, songSearch, styleFilter]);
 
   const filteredBlocksWithSongs = React.useMemo(() => {
+    const searchLower = songSearch.toLowerCase().trim();
+
     return blocks.map(block => {
+      const matchesBlockName = searchLower ? block.name.toLowerCase().includes(searchLower) : false;
+
       const blockSongs = (block.items || [])
         .map(item => songs.find(s => s.id === item.songId))
         .filter((s): s is Song => !!s)
         .filter(song => {
           const matchesStyle = styleFilter === 'all' || song.style === styleFilter;
-          const matchesSearch = song.title.toLowerCase().includes(songSearch.toLowerCase()) || 
-                               song.artist.toLowerCase().includes(songSearch.toLowerCase());
-          return matchesStyle && matchesSearch;
-        })
-        .sort((a, b) => a.title.localeCompare(b.title));
+          if (!matchesStyle) return false;
+          if (!searchLower) return true;
+
+          if (matchesBlockName) return true;
+
+          const matchesSongTitle = song.title.toLowerCase().includes(searchLower);
+          const matchesSongArtist = song.artist ? song.artist.toLowerCase().includes(searchLower) : false;
+          const matchesSongStyle = song.style ? song.style.toLowerCase().includes(searchLower) : false;
+
+          return matchesSongTitle || matchesSongArtist || matchesSongStyle;
+        });
 
       return { ...block, filteredSongs: blockSongs };
     })
-    .filter(block => (songSearch || styleFilter !== 'all') ? block.filteredSongs.length > 0 : true)
+    .filter(block => {
+      if (!songSearch && styleFilter === 'all') return true;
+      
+      const searchLower = songSearch.toLowerCase().trim();
+      const matchesBlockName = searchLower ? block.name.toLowerCase().includes(searchLower) : false;
+      
+      if (matchesBlockName) {
+        // If block matches by name, we keep it if it has songs, or if we want to show it as matching block
+        return true;
+      }
+      
+      return block.filteredSongs.length > 0;
+    })
     .sort((a, b) => a.name.localeCompare(b.name));
   }, [blocks, songs, songSearch, styleFilter]);
 
@@ -144,14 +186,61 @@ export function SetlistBuilder({
     setExpandedBlockIds([]);
   };
 
+  const isBlockInSetlist = (blockId: string) => {
+    return currentSetlist.items?.some(item => item.type === 'block' && item.id === blockId) || false;
+  };
+
+  const isSongInSetlist = (songId: string) => {
+    const isExplicit = currentSetlist.items?.some(item => item.type === 'song' && item.id === songId);
+    if (isExplicit) return true;
+
+    const activeBlockIdsInSetlist = currentSetlist.items
+      ?.filter(item => item.type === 'block')
+      .map(item => item.id) || [];
+      
+    const isInsideIncludedBlock = activeBlockIdsInSetlist.some(bId => {
+      const block = blocks.find(b => b.id === bId);
+      return block?.items?.some(item => item.songId === songId);
+    });
+
+    return isInsideIncludedBlock;
+  };
+
   const handleDragEnd = (result: DropResult) => {
     if (!result.destination) return;
 
-    const items = Array.from(currentSetlist.items || []);
-    const [reorderedItem] = items.splice(result.source.index, 1);
-    items.splice(result.destination.index, 0, reorderedItem);
+    if (result.source.droppableId === 'setlist' && result.destination.droppableId === 'setlist') {
+      const items = Array.from(currentSetlist.items || []);
+      const [reorderedItem] = items.splice(result.source.index, 1);
+      items.splice(result.destination.index, 0, reorderedItem);
 
-    setCurrentSetlist({ ...currentSetlist, items });
+      setCurrentSetlist({ ...currentSetlist, items });
+    } else if (result.source.droppableId === 'sidebar-explorer' && result.destination.droppableId === 'setlist') {
+      const dragId = result.draggableId;
+      let type: 'block' | 'song' | null = null;
+      let id = '';
+      
+      if (dragId.startsWith('sidebar-block_')) {
+        type = 'block';
+        id = dragId.substring('sidebar-block_'.length);
+      } else if (dragId.startsWith('sidebar-song_')) {
+        type = 'song';
+        const rest = dragId.substring('sidebar-song_'.length);
+        const lastUnderscore = rest.lastIndexOf('_');
+        if (lastUnderscore !== -1) {
+          id = rest.substring(0, lastUnderscore);
+        } else {
+          id = rest;
+        }
+      }
+      
+      if (type && id) {
+        const items = Array.from(currentSetlist.items || []);
+        items.splice(result.destination.index, 0, { type, id });
+        setCurrentSetlist({ ...currentSetlist, items });
+        toast.success(`${type === 'block' ? 'Bloco' : 'Música'} adicionada ao show`);
+      }
+    }
   };
 
   const addItemToSetlist = (type: 'block' | 'song', id: string) => {
@@ -277,48 +366,56 @@ export function SetlistBuilder({
   };
 
   return (
-    <div className="flex flex-col lg:grid lg:grid-cols-[1fr_340px] gap-0 -mx-4 -mt-4 md:-m-8 h-[calc(100vh-60px)] lg:h-[calc(100vh-0px)] overflow-hidden bg-background">
-      {/* Main: Setlist Builder */}
-      <div className="flex flex-col h-[42vh] lg:h-full shrink-0 lg:shrink max-h-[50vh] lg:max-h-none bg-background min-h-[220px] lg:min-h-0 border-b border-border lg:border-b-0">
-        <div className="p-3 md:p-6 border-b border-border flex flex-col md:flex-row justify-between items-start md:items-center bg-card/20 gap-2 md:gap-0">
-          <div className="flex-1 w-full md:max-w-xl">
-            <Input 
-              placeholder="NOME DO SHOW" 
-              className="font-light h-auto py-0 border-none px-0 focus-visible:ring-0 bg-transparent uppercase tracking-tight w-full text-base md:text-2xl" 
-              value={currentSetlist.name}
-              onChange={(e) => setCurrentSetlist({ ...currentSetlist, name: e.target.value })}
-            />
-          </div>
-          <div className="flex items-center justify-between w-full md:w-auto gap-4 md:space-x-6 mt-1 md:mt-0">
-            <div className="text-left md:text-right">
-              <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Total</p>
-              <p className="font-mono font-bold text-primary text-sm md:text-2xl">{formatDuration(getTotalDuration(currentSetlist.items || []))}</p>
-            </div>
-            <div className="flex items-center space-x-2">
-              {onCancel && (
-                <Button 
-                  variant="outline"
-                  onClick={onCancel} 
-                  className="h-8 px-3 text-xs font-bold border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-800"
-                >
-                  Voltar
+    <DragDropContext onDragEnd={handleDragEnd}>
+      <div className="flex flex-col lg:grid lg:grid-cols-[1fr_340px] gap-0 -mx-4 -mt-4 md:-m-8 h-[calc(100vh-60px)] lg:h-[calc(100vh-0px)] overflow-hidden bg-background">
+        {/* Main: Setlist Builder */}
+        <div className="flex flex-col h-[42vh] lg:h-full shrink-0 lg:shrink max-h-[50vh] lg:max-h-none bg-background min-h-[220px] lg:min-h-0 border-b border-border lg:border-b-0">
+          <div className="p-3 md:p-6 border-b border-border flex flex-col md:flex-row justify-between items-start md:items-center bg-card/20 gap-2 md:gap-0">
+            <div className="flex-1 w-full md:max-w-xl flex items-center space-x-3">
+              <Input 
+                placeholder="NOME DO SHOW" 
+                className="font-light h-auto py-0 border-none px-0 focus-visible:ring-0 bg-transparent uppercase tracking-tight w-full text-base md:text-2xl" 
+                value={currentSetlist.name}
+                onChange={(e) => setCurrentSetlist({ ...currentSetlist, name: e.target.value })}
+              />
+              <div className="flex space-x-1 border-l border-border pl-3 mr-2 shrink-0">
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={expandAllBuilderBlocks} title="Abrir todos os blocos do show">
+                  <ChevronsUpDown className="h-4 w-4 text-primary" />
                 </Button>
-              )}
-              <Button 
-                onClick={handleSaveSetlist} 
-                className="bg-primary hover:bg-primary/90 h-8 px-3 text-xs font-bold"
-              >
-                <Save className="h-3.5 w-3.5 mr-1 md:mr-2" /> Salvar
-              </Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white" onClick={collapseAllBuilderBlocks} title="Fechar todos os blocos do show">
+                  <ChevronsDownUp className="h-4 w-4" />
+                </Button>
+              </div>
+            </div>
+            <div className="flex items-center justify-between w-full md:w-auto gap-4 md:space-x-6 mt-1 md:mt-0">
+              <div className="text-left md:text-right">
+                <p className="text-[9px] text-muted-foreground uppercase tracking-wider">Total</p>
+                <p className="font-mono font-bold text-primary text-sm md:text-2xl">{formatDuration(getTotalDuration(currentSetlist.items || []))}</p>
+              </div>
+              <div className="flex items-center space-x-2">
+                {onCancel && (
+                  <Button 
+                    variant="outline"
+                    onClick={onCancel} 
+                    className="h-8 px-3 text-xs font-bold border-zinc-700 text-zinc-300 hover:text-white hover:bg-zinc-800"
+                  >
+                    Voltar
+                  </Button>
+                )}
+                <Button 
+                  onClick={handleSaveSetlist} 
+                  className="bg-primary hover:bg-primary/90 h-8 px-3 text-xs font-bold"
+                >
+                  <Save className="h-3.5 w-3.5 mr-1 md:mr-2" /> Salvar
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <ScrollArea className="flex-1 min-h-0 p-4 md:p-8">
-          <DragDropContext onDragEnd={handleDragEnd}>
+          <ScrollArea className="flex-1 min-h-0 p-3 md:p-4">
             <Droppable droppableId="setlist">
               {(provided) => (
-                <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-3">
+                <div {...provided.droppableProps} ref={provided.innerRef} className="space-y-1">
                   {currentSetlist.items?.map((item, index) => {
                     if (item.type === 'block') {
                       const block = blocks.find(b => b.id === item.id);
@@ -330,13 +427,13 @@ export function SetlistBuilder({
                             const blockStyles = getBlockStyles(block);
                             return (
                               <Card ref={provided.innerRef} {...provided.draggableProps} className="bg-card border-border hover:border-primary/30 transition-all">
-                                <CardContent className="p-4 flex flex-col">
+                                <CardContent className="py-2 px-3 md:px-4 flex flex-col">
                                   <div className="flex items-center">
-                                    <div {...provided.dragHandleProps} className="mr-4 opacity-30 hover:opacity-100 transition-opacity">
-                                      <GripVertical className="h-5 w-5" />
+                                    <div {...provided.dragHandleProps} className="mr-3 opacity-30 hover:opacity-100 transition-opacity">
+                                      <GripVertical className="h-4 w-4" />
                                     </div>
                                     <div className="flex-1 cursor-pointer select-none" onClick={() => toggleBuilderBlockExpansion(`${item.id}-${index}`)}>
-                                      <div className="flex items-center space-x-3">
+                                      <div className="flex items-center space-x-2">
                                         <span className="text-[10px] font-mono text-muted-foreground w-6">{(index + 1).toString().padStart(2, '0')}</span>
                                         <div className="flex items-center space-x-2">
                                           <p className="font-bold text-sm uppercase tracking-tight text-primary">Bloco: {block.name}</p>
@@ -360,7 +457,7 @@ export function SetlistBuilder({
                                         )}
                                       </div>
                                     </div>
-                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-zinc-800" onClick={() => removeItemFromSetlist(index)}>
+                                    <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white hover:bg-zinc-800" onClick={() => setRemoveItemConfirmIdx(index)}>
                                       <Trash2 className="h-4 w-4 text-destructive" />
                                     </Button>
                                   </div>
@@ -387,6 +484,20 @@ export function SetlistBuilder({
                                                 </span>
                                               )}
                                               <span className="text-primary/70">{formatDuration(song.duration)}</span>
+                                              {onEditSong && (
+                                                <Button 
+                                                  variant="ghost" 
+                                                  size="icon" 
+                                                  className="h-6 w-6 text-muted-foreground hover:text-primary hover:bg-primary/15 rounded-full"
+                                                  onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    onEditSong(song);
+                                                  }}
+                                                  title="Editar Música"
+                                                >
+                                                  <Edit className="h-3 w-3" />
+                                                </Button>
+                                              )}
                                             </div>
                                           </div>
                                         );
@@ -405,31 +516,54 @@ export function SetlistBuilder({
                     } else {
                       const song = songs.find(s => s.id === item.id);
                       if (!song) return null;
+                      
+                      // Find parent block if this is a loose song
+                      const parentBlock = blocks.find(b => (b.items || []).some(it => it.songId === song.id));
+                      const blockLabel = parentBlock ? `${parentBlock.name} (músicas avulsas)` : null;
+
                       return (
                         <DraggableAny key={`${item.id}-${index}`} draggableId={`${item.id}-${index}`} index={index}>
                           {(provided) => (
                             <Card ref={provided.innerRef} {...provided.draggableProps} className="bg-card/40 border-primary/20 hover:border-primary/50 transition-all border-dashed">
-                              <CardContent className="p-4 flex items-center">
-                                <div {...provided.dragHandleProps} className="mr-4 opacity-30 hover:opacity-100 transition-opacity">
-                                  <GripVertical className="h-5 w-5" />
+                              <CardContent className="py-1.5 px-3 md:px-4 flex items-center">
+                                <div {...provided.dragHandleProps} className="mr-3 opacity-30 hover:opacity-100 transition-opacity">
+                                  <GripVertical className="h-4 w-4" />
                                 </div>
                                 <div className="flex-1">
-                                  <div className="flex items-center space-x-3">
-                                    <span className="text-[10px] font-mono text-muted-foreground w-6">{(index + 1).toString().padStart(2, '0')}</span>
-                                    <p className="font-bold text-sm uppercase tracking-tight">{song.title}</p>
+                                  <div className="flex items-start space-x-2">
+                                    <span className="text-[9px] font-mono text-muted-foreground w-5 pt-0.5 text-right">{(index + 1).toString().padStart(2, '0')}</span>
+                                    <div>
+                                      {blockLabel && (
+                                        <p className="font-bold text-sm uppercase tracking-tight text-primary mb-0.5">{blockLabel}</p>
+                                      )}
+                                      <p className="font-bold text-[10.5px] uppercase tracking-tight">{song.title}</p>
+                                    </div>
                                   </div>
-                                  <div className="flex items-center space-x-4 mt-1 ml-9">
-                                    <p className="text-[11px] text-muted-foreground uppercase tracking-wider">
+                                  <div className="flex items-center space-x-4 mt-0.5 ml-7">
+                                    <p className="text-[10px] text-muted-foreground uppercase tracking-wider">
                                       {song.artist}
                                     </p>
-                                    <p className="text-[11px] text-primary/60 font-mono">
+                                    <p className="text-[10px] text-primary/60 font-mono">
                                       {formatDuration(song.duration)}
                                     </p>
                                   </div>
                                 </div>
-                                <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => removeItemFromSetlist(index)}>
-                                  <Trash2 className="h-4 w-4 text-destructive" />
-                                </Button>
+                                <div className="flex items-center space-x-1 shrink-0 ml-4">
+                                  {onEditSong && (
+                                    <Button 
+                                      variant="ghost" 
+                                      size="icon" 
+                                      className="h-7 w-7 text-muted-foreground hover:text-primary hover:bg-zinc-850"
+                                      onClick={() => onEditSong(song)}
+                                      title="Editar Música"
+                                    >
+                                      <Edit className="h-3.5 w-3.5" />
+                                    </Button>
+                                  )}
+                                  <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive hover:bg-zinc-850" onClick={() => setRemoveItemConfirmIdx(index)}>
+                                    <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                                  </Button>
+                                </div>
                               </CardContent>
                             </Card>
                           )}
@@ -447,7 +581,6 @@ export function SetlistBuilder({
                 </div>
               )}
             </Droppable>
-          </DragDropContext>
 
           {setlists.length > 0 && (
             <div className="mt-8 space-y-6">
@@ -517,169 +650,328 @@ export function SetlistBuilder({
             </Button>
           </div>
         </div>
-        <div className="border-b border-border bg-muted/20 p-3 md:p-4 space-y-3 md:space-y-4">
-          <div className="space-y-1">
-            <Label className="text-[9px] uppercase tracking-widest opacity-70">Estilo</Label>
-            <Select value={styleFilter} onValueChange={setStyleFilter}>
-              <SelectTrigger className="h-7 text-[10px]">
-                <SelectValue placeholder="Estilo" />
-              </SelectTrigger>
-              <SelectContent>
-                {styles.map(s => (
-                  <SelectItem key={s} value={s} className="text-xs">
-                    {s === 'all' ? 'Todos' : s}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="relative">
-            <Search className="absolute left-2 top-2 h-3 w-3 text-muted-foreground" />
-            <Input 
-              placeholder="Buscar..." 
-              className="pl-7 h-7 text-[10px]"
-              value={songSearch}
-              onChange={(e) => setSongSearch(e.target.value)}
-            />
+        <div className="border-b border-border bg-muted/20 p-2 md:p-3">
+          <div className="flex flex-row md:flex-col gap-2 items-end md:items-stretch">
+            <div className="w-[100px] shrink-0 md:w-full space-y-0.5">
+              <Label className="text-[8px] md:text-[9px] uppercase tracking-widest opacity-70">Estilo</Label>
+              <Select value={styleFilter} onValueChange={setStyleFilter}>
+                <SelectTrigger className="h-7 text-[10px] px-2 py-1">
+                  <SelectValue placeholder="Estilo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {styles.map(s => (
+                    <SelectItem key={s} value={s} className="text-xs">
+                      {s === 'all' ? 'Todos' : s}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex-1 md:w-full relative">
+              <Search className="absolute left-2 top-2 h-3 w-3 text-muted-foreground" />
+              <Input 
+                placeholder="Buscar..." 
+                className="pl-7 h-7 text-[10px]"
+                value={songSearch}
+                onChange={(e) => setSongSearch(e.target.value)}
+              />
+            </div>
           </div>
         </div>
         <ScrollArea className="flex-1 h-0">
-          <div className="p-3 space-y-6">
-            {/* Song Explorer Section */}
-            <div className="space-y-4">
-              <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-2">Repertório Organizado</h3>
-              
-              {filteredBlocksWithSongs.map(block => {
-                const isExpanded = expandedBlockIds.includes(block.id);
-                const blockDuration = (block.items || []).reduce((acc, item) => {
-                  const song = songs.find(s => s.id === item.songId);
-                  return acc + (song?.duration || 0);
-                }, 0);
-                const blockStyles = getBlockStyles(block);
-                return (
-                  <div key={block.id} className="space-y-2">
-                    <div className="px-2 bg-muted/40 py-2 rounded border border-border/30 hover:bg-muted/50 transition-colors">
-                      <div className="flex items-center justify-between">
-                        <div className="flex-1 flex flex-col cursor-pointer select-none" onClick={() => toggleBlockExpansion(block.id)}>
-                          <div className="flex items-center">
-                            {isExpanded ? <ChevronDown className="h-3.5 w-3.5 mr-1.5 text-primary" /> : <ChevronRight className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />}
-                            <h4 className="text-[10px] font-bold uppercase tracking-widest text-primary truncate max-w-[140px]">{block.name}</h4>
-                          </div>
-                          
-                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 ml-5 text-[9px] text-muted-foreground uppercase tracking-wider">
-                            <p>{(block.items || []).length} {(block.items || []).length === 1 ? 'música' : 'músicas'}</p>
-                            <div className="flex items-center font-mono text-primary/65">
-                              <Clock className="h-3 w-3 mr-0.5 opacity-60" />
-                              <span>{formatDuration(blockDuration)}</span>
-                            </div>
-                            {blockStyles && (
-                              <span className="text-[8px] px-1.5 py-0.5 rounded bg-[#39FF14]/10 text-primary font-bold tracking-widest uppercase">
-                                {blockStyles}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className="h-6 px-2 text-[9px] font-bold uppercase tracking-tighter hover:bg-primary hover:text-white transition-all rounded-sm flex items-center space-x-1 shrink-0 ml-2"
-                          onClick={() => addItemToSetlist('block', block.id)}
-                          title="Adicionar Bloco Inteiro"
-                        >
-                          <Plus className="h-3 w-3" />
-                          <span>Bloco</span>
-                        </Button>
-                      </div>
-                    </div>
-                    {isExpanded && (
-                      <div className="space-y-1 pl-3 border-l border-border/40 ml-3 py-1">
-                        {block.filteredSongs.map(song => (
-                          <div key={song.id} className="p-1.5 md:p-2 rounded-md border border-border/30 bg-card/30 group flex justify-between items-center hover:bg-card/60 transition-colors">
-                             <div 
-                                className="flex-1 min-w-0 mr-2 cursor-pointer group/item"
-                                onClick={() => {
-                                  setViewingSongLyrics(song);
-                                  setFormLyrics(song.lyrics || '');
-                                  setFormColumns(song.columns || 1);
-                                  setIsEditingLyrics(false);
-                                }}
+          <Droppable droppableId="sidebar-explorer" isDropDisabled={true}>
+            {(provided) => {
+              let localDragIndex = 0;
+              return (
+                <div 
+                  ref={provided.innerRef} 
+                  {...provided.droppableProps} 
+                  className="p-3 space-y-6"
+                >
+                  {/* Song Explorer Section */}
+                  <div className="space-y-4">
+                    <h3 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-2">Repertório Organizado</h3>
+                    
+                    {filteredBlocksWithSongs.map(block => {
+                      const isExpanded = expandedBlockIds.includes(block.id);
+                      const blockDuration = (block.items || []).reduce((acc, item) => {
+                        const song = songs.find(s => s.id === item.songId);
+                        return acc + (song?.duration || 0);
+                      }, 0);
+                      const blockStyles = getBlockStyles(block);
+                      const blockDragId = `sidebar-block_${block.id}`;
+                      const blockIndex = localDragIndex++;
+                      const isBlockIncluded = isBlockInSetlist(block.id);
+                      const isBlockPartiallyIncluded = !isBlockIncluded && (block.items || []).some(item => currentSetlist.items?.some(it => it.type === 'song' && it.id === item.songId));
+
+                      return (
+                        <div key={block.id} className="space-y-2">
+                          <DraggableAny key={blockDragId} draggableId={blockDragId} index={blockIndex}>
+                            {(p, s) => (
+                              <div 
+                                ref={p.innerRef}
+                                {...p.draggableProps}
+                                {...p.dragHandleProps}
+                                className={`px-2 py-2 rounded border transition-all ${
+                                  isBlockIncluded 
+                                    ? 'bg-emerald-500/5 hover:bg-emerald-500/10 border-emerald-500/30 border-l-4 border-l-emerald-500' 
+                                    : isBlockPartiallyIncluded
+                                      ? 'bg-amber-500/5 hover:bg-amber-500/10 border-amber-500/30 border-l-4 border-l-amber-500'
+                                      : 'bg-muted/40 border-border/30 hover:bg-muted/50'
+                                } ${s.isDragging ? 'shadow-md scale-102 border-primary bg-primary/10' : ''}`}
                               >
-                                <div className="flex justify-between items-start">
-                                  <p className="text-[11px] font-medium leading-tight group-hover/item:text-primary transition-colors truncate">{song.title}</p>
-                                  <span className="text-[9px] font-mono opacity-40 ml-2">{formatDuration(song.duration)}</span>
-                                </div>
                                 <div className="flex items-center justify-between">
-                                  <p className="text-[9px] text-muted-foreground truncate opacity-60">{song.artist}</p>
-                                  {song.lyrics && <Music className="h-2 w-2 text-primary opacity-40" />}
+                                  <div className="flex-1 flex flex-col cursor-pointer select-none" onClick={() => toggleBlockExpansion(block.id)}>
+                                    <div className="flex items-center">
+                                      {isExpanded ? <ChevronDown className="h-3.5 w-3.5 mr-1.5 text-primary" /> : <ChevronRight className="h-3.5 w-3.5 mr-1.5 text-muted-foreground" />}
+                                      <h4 className={`text-[10px] font-bold uppercase tracking-widest truncate max-w-[140px] ${
+                                        isBlockIncluded 
+                                          ? 'text-emerald-400 font-extrabold' 
+                                          : isBlockPartiallyIncluded
+                                            ? 'text-amber-400 font-extrabold'
+                                            : 'text-primary'
+                                      }`}>
+                                        {block.name}
+                                      </h4>
+                                      {isBlockIncluded && (
+                                        <span className="text-[8px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-400 font-bold tracking-widest uppercase ml-1.5 animate-in fade-in shrink-0 border border-emerald-500/20">
+                                          ✓ Incluso
+                                        </span>
+                                      )}
+                                      {isBlockPartiallyIncluded && (
+                                        <span className="text-[8px] px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-400 font-bold tracking-widest uppercase ml-1.5 animate-in fade-in shrink-0 border border-amber-500/20">
+                                          ✓ Músicas Avulsas
+                                        </span>
+                                      )}
+                                    </div>
+                                    
+                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1 ml-5 text-[9px] text-muted-foreground uppercase tracking-wider">
+                                      <p>{(block.items || []).length} {(block.items || []).length === 1 ? 'música' : 'músicas'}</p>
+                                      <div className="flex items-center font-mono text-primary/65">
+                                        <Clock className="h-3 w-3 mr-0.5 opacity-60" />
+                                        <span>{formatDuration(blockDuration)}</span>
+                                      </div>
+                                      {blockStyles && (
+                                        <span className="text-[8px] px-1.5 py-0.5 rounded bg-[#39FF14]/10 text-primary font-bold tracking-widest uppercase">
+                                          {blockStyles}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                  <Button 
+                                    type="button"
+                                    variant="ghost" 
+                                    size="sm" 
+                                    className="h-6 px-2 text-[9px] font-bold uppercase tracking-tighter hover:bg-primary hover:text-white transition-all rounded-sm flex items-center space-x-1 shrink-0 ml-2"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      addItemToSetlist('block', block.id);
+                                    }}
+                                    title="Adicionar Bloco Inteiro"
+                                  >
+                                    <Plus className="h-3 w-3" />
+                                    <span>Bloco</span>
+                                  </Button>
                                 </div>
                               </div>
-                            <Button 
-                              variant="ghost" 
-                              size="sm" 
-                              className="h-6 w-6 p-0 hover:bg-primary/20 shrink-0 rounded-full"
-                              onClick={() => addItemToSetlist('song', song.id)}
-                              title="Adicionar apenas esta música"
-                            >
-                              <Plus className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        ))}
-                        {block.filteredSongs.length === 0 && (
-                          <p className="text-[9px] text-muted-foreground flex items-center justify-center py-2 opacity-50 italic">
-                            Nenhuma música encontrada
-                          </p>
-                        )}
+                            )}
+                          </DraggableAny>
+                          {isExpanded && (
+                            <div className="space-y-1 pl-3 border-l border-border/40 ml-3 py-1">
+                              {block.filteredSongs.map(song => {
+                                const songDragId = `sidebar-song_${song.id}_${block.id}`;
+                                const songIndex = localDragIndex++;
+                                const isSongIncluded = isSongInSetlist(song.id);
+
+                                return (
+                                  <DraggableAny key={songDragId} draggableId={songDragId} index={songIndex}>
+                                    {(p2, s2) => (
+                                      <div 
+                                        ref={p2.innerRef}
+                                        {...p2.draggableProps}
+                                        {...p2.dragHandleProps}
+                                        className={`p-1.5 md:p-2 rounded-md border flex items-center justify-between transition-all ${
+                                          isSongIncluded 
+                                            ? 'bg-emerald-500/5 hover:bg-emerald-500/10 border-emerald-500/25' 
+                                            : 'bg-card/30 border-border/30 hover:bg-card/60'
+                                        } ${s2.isDragging ? 'shadow-md scale-102 border-primary bg-primary/10' : ''}`}
+                                      >
+                                        <div 
+                                          className="flex-1 min-w-0 mr-2 cursor-pointer group/item"
+                                          onClick={() => {
+                                            setViewingSongLyrics(song);
+                                            setFormLyrics(song.lyrics || '');
+                                            setFormColumns(song.columns || 1);
+                                            setIsEditingLyrics(false);
+                                          }}
+                                        >
+                                          <div className="flex justify-between items-start">
+                                            <div className="flex items-center min-w-0">
+                                              <p className={`text-[11px] leading-tight group-hover/item:text-primary transition-colors truncate ${
+                                                isSongIncluded ? 'text-emerald-400 font-semibold' : 'font-medium'
+                                              }`}>
+                                                {song.title}
+                                              </p>
+                                              {isSongIncluded && (
+                                                <span className="text-[7px] font-bold text-emerald-400 bg-emerald-500/10 px-1 py-0.2 rounded uppercase border border-emerald-500/20 shrink-0 ml-1.5 animate-in fade-in">
+                                                  Incluso
+                                                </span>
+                                              )}
+                                            </div>
+                                            <span className="text-[9px] font-mono opacity-40 ml-2 shrink-0">{formatDuration(song.duration)}</span>
+                                          </div>
+                                          <div className="flex items-center justify-between mt-0.5">
+                                            <p className="text-[9px] text-muted-foreground truncate opacity-60">{song.artist}</p>
+                                            {song.lyrics && <Music className="h-2 w-2 text-primary opacity-40 shrink-0 ml-1" />}
+                                          </div>
+                                        </div>
+                                        <div className="flex items-center space-x-0.5 shrink-0 ml-1">
+                                          {onEditSong && (
+                                            <Button 
+                                              type="button"
+                                              variant="ghost" 
+                                              size="sm" 
+                                              className="h-6 w-6 p-0 hover:bg-primary/20 rounded-full"
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                onEditSong(song);
+                                              }}
+                                              title="Editar Música"
+                                            >
+                                              <Edit className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                                            </Button>
+                                          )}
+                                          <Button 
+                                            type="button"
+                                            variant="ghost" 
+                                            size="sm" 
+                                            className="h-6 w-6 p-0 hover:bg-primary/20 shrink-0 rounded-full"
+                                            onClick={(e) => {
+                                              e.stopPropagation();
+                                              addItemToSetlist('song', song.id);
+                                            }}
+                                            title="Adicionar apenas esta música"
+                                          >
+                                            <Plus className="h-3 w-3" />
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </DraggableAny>
+                                );
+                              })}
+                              {block.filteredSongs.length === 0 && (
+                                <p className="text-[9px] text-muted-foreground flex items-center justify-center py-2 opacity-50 italic">
+                                  Nenhuma música encontrada
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {uncategorizedSongs.length > 0 && (
+                      <div className="pt-4 mt-6 border-t border-border/50">
+                        <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-2 mb-3">Músicas Sem Bloco / Avulsas</h4>
+                        <div className="space-y-1.5">
+                          {uncategorizedSongs.map(song => {
+                            const songDragId = `sidebar-song_${song.id}_uncategorized`;
+                            const songIndex = localDragIndex++;
+                            const isSongIncluded = isSongInSetlist(song.id);
+
+                            return (
+                              <DraggableAny key={songDragId} draggableId={songDragId} index={songIndex}>
+                                {(p3, s3) => (
+                                  <div 
+                                    ref={p3.innerRef}
+                                    {...p3.draggableProps}
+                                    {...p3.dragHandleProps}
+                                    className={`p-1.5 md:p-2 rounded-md border flex items-center justify-between transition-all ${
+                                      isSongIncluded 
+                                        ? 'bg-emerald-500/5 hover:bg-emerald-500/10 border-emerald-500/25' 
+                                        : 'bg-card/20 border-border/30 hover:bg-card/40'
+                                    } ${s3.isDragging ? 'shadow-md scale-102 border-primary bg-primary/10' : ''}`}
+                                  >
+                                    <div 
+                                      className="flex-1 min-w-0 mr-2 cursor-pointer group/item"
+                                      onClick={() => {
+                                        setViewingSongLyrics(song);
+                                        setFormLyrics(song.lyrics || '');
+                                        setIsEditingLyrics(false);
+                                      }}
+                                    >
+                                      <div className="flex justify-between items-start">
+                                        <div className="flex items-center min-w-0">
+                                          <p className={`text-[11px] leading-tight group-hover/item:text-primary transition-colors truncate ${
+                                            isSongIncluded ? 'text-emerald-400 font-semibold' : 'font-medium'
+                                          }`}>
+                                            {song.title}
+                                          </p>
+                                          {isSongIncluded && (
+                                            <span className="text-[7px] font-bold text-emerald-400 bg-emerald-500/10 px-1 py-0.2 rounded uppercase border border-emerald-500/20 shrink-0 ml-1.5 animate-in fade-in">
+                                              Incluso
+                                            </span>
+                                          )}
+                                        </div>
+                                        <span className="text-[9px] font-mono opacity-40 ml-2 shrink-0">{formatDuration(song.duration)}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between mt-0.5">
+                                        <p className="text-[9px] text-muted-foreground truncate opacity-60">{song.artist}</p>
+                                        {song.lyrics && <Music className="h-2 w-2 text-primary opacity-40 shrink-0 ml-1" />}
+                                      </div>
+                                    </div>
+                                    <div className="flex items-center space-x-0.5 shrink-0 ml-1">
+                                      {onEditSong && (
+                                        <Button 
+                                          type="button"
+                                          variant="ghost" 
+                                          size="sm" 
+                                          className="h-6 w-6 p-0 hover:bg-primary/20 rounded-full"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            onEditSong(song);
+                                          }}
+                                          title="Editar Música"
+                                        >
+                                          <Edit className="h-3 w-3 text-muted-foreground hover:text-primary" />
+                                        </Button>
+                                      )}
+                                      <Button 
+                                        type="button"
+                                        variant="ghost" 
+                                        size="sm" 
+                                        className="h-6 w-6 p-0 hover:bg-primary/20 shrink-0 rounded-full"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          addItemToSetlist('song', song.id);
+                                        }}
+                                        title="Adicionar apenas esta música"
+                                      >
+                                        <Plus className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  </div>
+                                )}
+                              </DraggableAny>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {filteredBlocksWithSongs.length === 0 && uncategorizedSongs.length === 0 && (
+                      <div className="py-12 text-center">
+                        <Music className="h-8 w-8 text-muted-foreground mx-auto mb-3 opacity-10" />
+                        <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Nenhuma música ou bloco disponível.</p>
                       </div>
                     )}
                   </div>
-                );
-              })}
-
-              {uncategorizedSongs.length > 0 && (
-                <div className="pt-4 mt-6 border-t border-border/50">
-                  <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground px-2 mb-3">Músicas Sem Bloco / Avulsas</h4>
-                  <div className="space-y-1.5">
-                    {uncategorizedSongs.map(song => (
-                      <div key={song.id} className="p-1.5 md:p-2 rounded-md border border-border/30 bg-card/20 group flex justify-between items-center hover:bg-card/40 transition-colors">
-                        <div 
-                          className="flex-1 min-w-0 mr-2 cursor-pointer group/item"
-                          onClick={() => {
-                            setViewingSongLyrics(song);
-                            setFormLyrics(song.lyrics || '');
-                            setIsEditingLyrics(false);
-                          }}
-                        >
-                          <div className="flex justify-between items-start">
-                            <p className="text-[11px] font-medium leading-tight group-hover/item:text-primary transition-colors truncate">{song.title}</p>
-                            <span className="text-[9px] font-mono opacity-40 ml-2">{formatDuration(song.duration)}</span>
-                          </div>
-                          <div className="flex items-center justify-between">
-                            <p className="text-[9px] text-muted-foreground truncate opacity-60">{song.artist}</p>
-                            {song.lyrics && <Music className="h-2 w-2 text-primary opacity-40" />}
-                          </div>
-                        </div>
-                        <Button 
-                          variant="ghost" 
-                          size="sm" 
-                          className="h-6 w-6 p-0 hover:bg-primary/20 shrink-0 rounded-full"
-                          onClick={() => addItemToSetlist('song', song.id)}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
+                  {provided.placeholder}
                 </div>
-              )}
-
-              {filteredBlocksWithSongs.length === 0 && uncategorizedSongs.length === 0 && (
-                <div className="py-12 text-center">
-                  <Music className="h-8 w-8 text-muted-foreground mx-auto mb-3 opacity-10" />
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest">Nenhuma música ou bloco disponível.</p>
-                </div>
-              )}
-            </div>
-          </div>
+              );
+            }}
+          </Droppable>
         </ScrollArea>
     </div>
 
@@ -700,6 +992,27 @@ export function SetlistBuilder({
                 setDeleteConfirmId(null);
               }
             }}>Excluir</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={removeItemConfirmIdx !== null} onOpenChange={(open) => !open && setRemoveItemConfirmIdx(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Confirmar Remoção</DialogTitle>
+          </DialogHeader>
+          <div className="py-2 text-sm text-muted-foreground">
+            Tem certeza que deseja remover este item do show atual?
+          </div>
+          <div className="flex justify-end space-x-2">
+            <Button variant="outline" onClick={() => setRemoveItemConfirmIdx(null)}>Cancelar</Button>
+            <Button variant="destructive" onClick={() => {
+              if (removeItemConfirmIdx !== null) {
+                removeItemFromSetlist(removeItemConfirmIdx);
+                setRemoveItemConfirmIdx(null);
+                toast.success('Item removido do setlist.');
+              }
+            }}>Remover</Button>
           </div>
         </DialogContent>
       </Dialog>
@@ -784,11 +1097,12 @@ export function SetlistBuilder({
                     <style>{`
                       .lyrics-preview-content {
                         font-size: 40px;
-                        line-height: 1.2;
+                        line-height: ${viewingSongLyrics?.lineSpacing === '1.5' ? '1.5' : '1.0'};
                         color: white;
                       }
                       .lyrics-preview-content p {
-                        margin-bottom: 1.5rem;
+                        margin-bottom: ${viewingSongLyrics?.lineSpacing === '1.5' ? '1.25rem' : '0.3rem'} !important;
+                        line-height: ${viewingSongLyrics?.lineSpacing === '1.5' ? '1.5' : '1.0'} !important;
                         break-inside: auto;
                       }
                       .lyrics-preview-content p:last-child {
@@ -828,5 +1142,6 @@ export function SetlistBuilder({
         </DialogContent>
       </Dialog>
     </div>
+   </DragDropContext>
   );
 }
